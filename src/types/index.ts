@@ -1,15 +1,26 @@
 export type FileType = 'waybill' | 'receipt' | 'fuelCard' | 'tollFee' | 'quotation';
 
+export interface InvalidRowDetail {
+  rowNo: number;
+  reason: string;
+  fields: Record<string, unknown>;
+}
+
 export interface ImportFile {
   id: string;
   type: FileType;
   name: string;
   size: number;
-  status: 'uploading' | 'success' | 'error';
+  status: 'uploading' | 'preview' | 'success' | 'error';
   progress: number;
   rows?: number;
   errorMessage?: string;
   uploadedAt: string;
+  headers?: string[];
+  validRows?: number;
+  invalidRows?: number;
+  invalidDetails?: InvalidRowDetail[];
+  parsedData?: any[];
 }
 
 export interface Waybill {
@@ -107,6 +118,8 @@ export interface DiffRecord {
   waybill?: Waybill;
 }
 
+export type CheckRecordStatus = 'pending' | 'checking' | 'reviewing' | 'reviewed' | 'archived';
+
 export interface CheckRecord {
   id: string;
   checkBatchNo: string;
@@ -114,20 +127,30 @@ export interface CheckRecord {
   totalWaybills: number;
   matchedCount: number;
   diffCount: number;
-  status: 'pending' | 'reviewing' | 'completed';
+  affectedWaybillCount: number;
+  status: CheckRecordStatus;
   operator: string;
   remark?: string;
   totalAmount: number;
   diffAmount: number;
   payableAmount: number;
+  reviewedAt?: string;
+  archivedAt?: string;
   diffs: DiffRecord[];
   carrierSummaries: CarrierSummary[];
+  waybillSummaries: WaybillSummary[];
+  waybills: Waybill[];
+  receipts: Receipt[];
+  fuelCardRecords: FuelCardRecord[];
+  tollFees: TollFee[];
+  quotations: Quotation[];
 }
 
 export interface CheckSummary {
   totalWaybills: number;
   matchedCount: number;
   diffCount: number;
+  affectedWaybillCount: number;
   diffByType: Record<DiffType, number>;
   totalAmount: number;
   diffAmount: number;
@@ -139,6 +162,18 @@ export interface CarrierSummary {
   waybillCount: number;
   totalAmount: number;
   diffCount: number;
+  affectedWaybillCount: number;
+  diffAmount: number;
+  payableAmount: number;
+}
+
+export interface WaybillSummary {
+  waybillNo: string;
+  plateNo: string;
+  carrier: string;
+  freight: number;
+  diffCount: number;
+  diffTypes: DiffType[];
   diffAmount: number;
   payableAmount: number;
 }
@@ -183,6 +218,22 @@ export const DIFF_STATUS_COLORS: Record<DiffStatus, string> = {
   confirmed: 'bg-emerald-50 text-emerald-600 border-emerald-200',
   rejected: 'bg-rose-50 text-rose-600 border-rose-200',
   adjusted: 'bg-blue-50 text-blue-600 border-blue-200',
+};
+
+export const CHECK_RECORD_STATUS_LABELS: Record<CheckRecordStatus, string> = {
+  pending: '待核对',
+  checking: '核对中',
+  reviewing: '复核中',
+  reviewed: '复核完成',
+  archived: '归档完成',
+};
+
+export const CHECK_RECORD_STATUS_COLORS: Record<CheckRecordStatus, string> = {
+  pending: 'bg-gray-50 text-gray-600 border-gray-200',
+  checking: 'bg-sky-50 text-sky-600 border-sky-200',
+  reviewing: 'bg-amber-50 text-amber-600 border-amber-200',
+  reviewed: 'bg-blue-50 text-blue-600 border-blue-200',
+  archived: 'bg-emerald-50 text-emerald-600 border-emerald-200',
 };
 
 export const VEHICLE_TYPES = ['4.2米厢车', '6.8米厢车', '9.6米厢车', '13米高栏', '17.5米平板'];

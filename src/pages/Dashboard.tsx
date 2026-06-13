@@ -13,9 +13,14 @@ import {
 } from 'lucide-react';
 import { StatCard } from '@/components/StatCard';
 import { Button } from '@/components/Button';
+import { Badge } from '@/components/Badge';
 import { useAppStore } from '@/store/useAppStore';
 import { formatAmount } from '@/utils/fileParser';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import {
+  CHECK_RECORD_STATUS_LABELS,
+  CHECK_RECORD_STATUS_COLORS,
+} from '@/types';
 
 export const Dashboard = () => {
   const navigate = useNavigate();
@@ -164,21 +169,9 @@ export const Dashboard = () => {
                     <p className="font-medium text-gray-900 text-sm">{record.checkBatchNo}</p>
                     <p className="text-xs text-gray-500 mt-1">{record.checkDate}</p>
                   </div>
-                  <span
-                    className={`text-xs px-2 py-1 rounded-full ${
-                      record.status === 'completed'
-                        ? 'bg-emerald-100 text-emerald-600'
-                        : record.status === 'reviewing'
-                        ? 'bg-amber-100 text-amber-600'
-                        : 'bg-gray-100 text-gray-600'
-                    }`}
-                  >
-                    {record.status === 'completed'
-                      ? '已完成'
-                      : record.status === 'reviewing'
-                      ? '复核中'
-                      : '待处理'}
-                  </span>
+                  <Badge className={CHECK_RECORD_STATUS_COLORS[record.status] || 'bg-gray-100 text-gray-600'} size="sm">
+                    {CHECK_RECORD_STATUS_LABELS[record.status] || record.status}
+                  </Badge>
                 </div>
                 <div className="flex items-center gap-4 mt-3 text-xs text-gray-500">
                   <span className="flex items-center gap-1">

@@ -3,7 +3,9 @@ import { Waybill, Receipt, FuelCardRecord, TollFee, Quotation, FileType } from '
 
 const generateId = () => Math.random().toString(36).substring(2, 11);
 
-export const parseExcelFile = async <T>(file: File, type: FileType): Promise<T[]> => {
+export const parseExcelFile = async (
+  file: File
+): Promise<{ headers: string[]; rows: Record<string, unknown>[] }> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -12,10 +14,16 @@ export const parseExcelFile = async <T>(file: File, type: FileType): Promise<T[]
         const workbook = XLSX.read(data, { type: 'array' });
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet) as Record<string, unknown>[];
 
-        const parsedData = jsonData.map((row) => mapRowToType(row, type) as unknown as T);
-        resolve(parsedData.filter((item) => item !== null) as T[]);
+        const headers: string[] = [];
+        const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+        for (let c = range.s.c; c <= range.e.c; c += 1) {
+          const cell = worksheet[XLSX.utils.encode_cell({ r: range.s.r, c })];
+          headers.push(cell ? String(cell.v).trim() : '');
+        }
+
+        const jsonData = XLSX.utils.sheet_to_json(worksheet) as Record<string, unknown>[];
+        resolve({ headers: headers.filter(Boolean), rows: jsonData });
       } catch (error) {
         reject(error);
       }
@@ -23,6 +31,12 @@ export const parseExcelFile = async <T>(file: File, type: FileType): Promise<T[]
     reader.onerror = reject;
     reader.readAsArrayBuffer(file);
   });
+};
+
+export const parseExcelFileWithType = async <T>(file: File, type: FileType): Promise<T[]> => {
+  const { rows } = await parseExcelFile(file);
+  const parsedData = rows.map((row) => mapRowToType(row, type) as unknown as T);
+  return parsedData.filter((item) => item !== null) as T[];
 };
 
 const mapRowToType = (row: Record<string, unknown>, type: FileType): unknown => {

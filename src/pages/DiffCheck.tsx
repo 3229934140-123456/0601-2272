@@ -14,6 +14,8 @@ import {
   Clock,
   XCircle,
   RefreshCw,
+  Users,
+  Truck,
 } from 'lucide-react';
 import { StepIndicator } from '@/components/StepIndicator';
 import { Button } from '@/components/Button';
@@ -36,12 +38,15 @@ export const DiffCheck = () => {
   const navigate = useNavigate();
   const [isChecking, setIsChecking] = useState(false);
   const [hasChecked, setHasChecked] = useState(false);
+  const [activeTab, setActiveTab] = useState<'diffs' | 'waybills' | 'carriers'>('diffs');
 
   const {
     waybills,
     diffRecords,
     runCheck,
     getCheckSummary,
+    getWaybillSummaries,
+    getCarrierSummaries,
     selectedDiffIds,
     toggleSelectDiff,
     selectAllDiffs,
@@ -57,6 +62,8 @@ export const DiffCheck = () => {
   } = useAppStore();
 
   const summary = getCheckSummary();
+  const waybillSummaries = getWaybillSummaries();
+  const carrierSummaries = getCarrierSummaries();
   const filteredDiffs = getFilteredDiffs();
   const allSelected = filteredDiffs.length > 0 && filteredDiffs.every((d) => selectedDiffIds.includes(d.id));
 
@@ -86,7 +93,7 @@ export const DiffCheck = () => {
         <StepIndicator steps={steps} currentStep={2} />
       </div>
 
-      <div className="grid grid-cols-4 gap-6 mb-6">
+      <div className="grid grid-cols-5 gap-6 mb-6">
         <StatCard
           title="运单总数"
           value={summary.totalWaybills}
@@ -100,10 +107,16 @@ export const DiffCheck = () => {
           color="green"
         />
         <StatCard
+          title="受影响运单"
+          value={summary.affectedWaybillCount}
+          icon={Truck}
+          color="amber"
+        />
+        <StatCard
           title="差异数量"
           value={summary.diffCount}
           icon={AlertTriangle}
-          color="amber"
+          color="red"
         />
         <StatCard
           title="差异金额"
@@ -142,51 +155,86 @@ export const DiffCheck = () => {
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-gray-100 flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="relative">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="搜索运单号、车牌号、承运商..."
-                  value={searchKeyword}
-                  onChange={(e) => setSearchKeyword(e.target.value)}
-                  className="pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm w-72 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                />
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Filter className="w-4 h-4 text-gray-400" />
-                <select
-                  value={filterDiffType}
-                  onChange={(e) => setFilterDiffType(e.target.value as DiffType | 'all')}
-                  className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                >
-                  <option value="all">全部问题类型</option>
-                  {diffTypes.map((type) => (
-                    <option key={type} value={type}>
-                      {DIFF_TYPE_LABELS[type]}
-                    </option>
-                  ))}
-                </select>
-
-                <select
-                  value={filterDiffStatus}
-                  onChange={(e) => setFilterDiffStatus(e.target.value as DiffStatus | 'all')}
-                  className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                >
-                  <option value="all">全部状态</option>
-                  {diffStatuses.map((status) => (
-                    <option key={status} value={status}>
-                      {DIFF_STATUS_LABELS[status]}
-                    </option>
-                  ))}
-                </select>
-              </div>
+          <div className="p-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => setActiveTab('diffs')}
+                className={`px-4 py-2 text-sm rounded-lg font-medium transition-colors ${
+                  activeTab === 'diffs'
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                差异明细
+              </button>
+              <button
+                onClick={() => setActiveTab('waybills')}
+                className={`px-4 py-2 text-sm rounded-lg font-medium transition-colors ${
+                  activeTab === 'waybills'
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                按运单汇总
+              </button>
+              <button
+                onClick={() => setActiveTab('carriers')}
+                className={`px-4 py-2 text-sm rounded-lg font-medium transition-colors ${
+                  activeTab === 'carriers'
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                按承运商汇总
+              </button>
             </div>
 
+            {activeTab === 'diffs' && (
+              <div className="flex items-center gap-4">
+                <div className="relative">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="搜索运单号、车牌号、承运商..."
+                    value={searchKeyword}
+                    onChange={(e) => setSearchKeyword(e.target.value)}
+                    className="pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm w-72 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Filter className="w-4 h-4 text-gray-400" />
+                  <select
+                    value={filterDiffType}
+                    onChange={(e) => setFilterDiffType(e.target.value as DiffType | 'all')}
+                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                  >
+                    <option value="all">全部问题类型</option>
+                    {diffTypes.map((type) => (
+                      <option key={type} value={type}>
+                        {DIFF_TYPE_LABELS[type]}
+                      </option>
+                    ))}
+                  </select>
+
+                  <select
+                    value={filterDiffStatus}
+                    onChange={(e) => setFilterDiffStatus(e.target.value as DiffStatus | 'all')}
+                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                  >
+                    <option value="all">全部状态</option>
+                    {diffStatuses.map((status) => (
+                      <option key={status} value={status}>
+                        {DIFF_STATUS_LABELS[status]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center gap-3">
-              {selectedDiffIds.length > 0 && (
+              {activeTab === 'diffs' && selectedDiffIds.length > 0 && (
                 <span className="text-sm text-gray-500">
                   已选 <span className="font-medium text-blue-600">{selectedDiffIds.length}</span> 条
                 </span>
@@ -203,94 +251,213 @@ export const DiffCheck = () => {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-gray-50">
-                  <th className="px-4 py-3 w-10">
-                    <button onClick={allSelected ? clearSelection : selectAllDiffs}>
-                      {allSelected ? (
-                        <CheckSquare className="w-5 h-5 text-blue-600" />
-                      ) : (
-                        <Square className="w-5 h-5 text-gray-300" />
-                      )}
-                    </button>
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    运单号
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    车牌号
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    承运商
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    问题类型
-                  </th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    预期金额
-                  </th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    实际金额
-                  </th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    差异金额
-                  </th>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    状态
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {filteredDiffs.map((diff, index) => (
-                  <tr
-                    key={diff.id}
-                    className="hover:bg-blue-50/50 transition-colors cursor-pointer"
-                    style={{
-                      animation: `fadeInUp 0.3s ease-out ${index * 0.05}s both`,
-                    }}
-                  >
-                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      <button onClick={() => toggleSelectDiff(diff.id)}>
-                        {selectedDiffIds.includes(diff.id) ? (
+          {activeTab === 'diffs' && (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="px-4 py-3 w-10">
+                      <button onClick={allSelected ? clearSelection : selectAllDiffs}>
+                        {allSelected ? (
                           <CheckSquare className="w-5 h-5 text-blue-600" />
                         ) : (
-                          <Square className="w-5 h-5 text-gray-300 hover:text-gray-400" />
+                          <Square className="w-5 h-5 text-gray-300" />
                         )}
                       </button>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="font-medium text-gray-900">{diff.waybillNo}</span>
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">{diff.plateNo}</td>
-                    <td className="px-4 py-3 text-gray-600">{diff.carrier}</td>
-                    <td className="px-4 py-3">
-                      <Badge className={DIFF_TYPE_COLORS[diff.diffType]} variant="default">
-                        {DIFF_TYPE_LABELS[diff.diffType]}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-right text-gray-600">
-                      ¥{formatAmount(diff.expectedAmount)}
-                    </td>
-                    <td className="px-4 py-3 text-right text-gray-600">
-                      ¥{formatAmount(diff.actualAmount)}
-                    </td>
-                    <td className="px-4 py-3 text-right font-medium text-red-600">
-                      ¥{formatAmount(diff.diffAmount)}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <Badge className={DIFF_STATUS_COLORS[diff.status]} variant="default">
-                        {DIFF_STATUS_LABELS[diff.status]}
-                      </Badge>
-                    </td>
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      运单号
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      车牌号
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      承运商
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      问题类型
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      预期金额
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      实际金额
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      差异金额
+                    </th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      状态
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredDiffs.map((diff, index) => (
+                    <tr
+                      key={diff.id}
+                      className="hover:bg-blue-50/50 transition-colors cursor-pointer"
+                      style={{
+                        animation: `fadeInUp 0.3s ease-out ${index * 0.05}s both`,
+                      }}
+                    >
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        <button onClick={() => toggleSelectDiff(diff.id)}>
+                          {selectedDiffIds.includes(diff.id) ? (
+                            <CheckSquare className="w-5 h-5 text-blue-600" />
+                          ) : (
+                            <Square className="w-5 h-5 text-gray-300 hover:text-gray-400" />
+                          )}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="font-medium text-gray-900">{diff.waybillNo}</span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-600">{diff.plateNo}</td>
+                      <td className="px-4 py-3 text-gray-600">{diff.carrier}</td>
+                      <td className="px-4 py-3">
+                        <Badge className={DIFF_TYPE_COLORS[diff.diffType]} variant="default">
+                          {DIFF_TYPE_LABELS[diff.diffType]}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3 text-right text-gray-600">
+                        ¥{formatAmount(diff.expectedAmount)}
+                      </td>
+                      <td className="px-4 py-3 text-right text-gray-600">
+                        ¥{formatAmount(diff.actualAmount)}
+                      </td>
+                      <td className="px-4 py-3 text-right font-medium text-red-600">
+                        ¥{formatAmount(diff.diffAmount)}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <Badge className={DIFF_STATUS_COLORS[diff.status]} variant="default">
+                          {DIFF_STATUS_LABELS[diff.status]}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
-          {filteredDiffs.length === 0 && (
+          {activeTab === 'waybills' && (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      运单号
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      车牌号
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      承运商
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      运费
+                    </th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      差异数量
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      问题类型
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      差异金额
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      应付金额
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {waybillSummaries.map((ws) => (
+                    <tr key={ws.waybillNo} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 font-medium text-gray-900">{ws.waybillNo}</td>
+                      <td className="px-4 py-3 text-gray-600">{ws.plateNo}</td>
+                      <td className="px-4 py-3 text-gray-600">{ws.carrier}</td>
+                      <td className="px-4 py-3 text-right text-gray-900">¥{formatAmount(ws.freight)}</td>
+                      <td className="px-4 py-3 text-center">
+                        <Badge className={`${ws.diffCount > 0 ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-emerald-100 text-emerald-700 border-emerald-200'}`} size="sm">
+                          {ws.diffCount > 0 ? `${ws.diffCount} 条` : '无'}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-1">
+                          {ws.diffTypes.map((t) => (
+                            <Badge key={t} className={DIFF_TYPE_COLORS[t]} size="sm">
+                              {DIFF_TYPE_LABELS[t]}
+                            </Badge>
+                          ))}
+                          {ws.diffTypes.length === 0 && <span className="text-gray-400 text-xs">-</span>}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span className={ws.diffAmount > 0 ? 'text-red-600 font-medium' : 'text-gray-400'}>
+                          {ws.diffAmount > 0 ? `¥${formatAmount(ws.diffAmount)}` : '-'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right font-semibold text-blue-600">
+                        ¥{formatAmount(ws.payableAmount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {activeTab === 'carriers' && (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      承运商
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      运单数量
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      受影响运单
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      差异数量
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      总金额
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      差异金额
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      应付金额
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {carrierSummaries.map((cs) => (
+                    <tr key={cs.carrier} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 font-medium text-gray-900">{cs.carrier}</td>
+                      <td className="px-4 py-3 text-right text-gray-600">{cs.waybillCount}</td>
+                      <td className="px-4 py-3 text-right">
+                        <Badge className={cs.affectedWaybillCount > 0 ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-emerald-100 text-emerald-700 border-emerald-200'} size="sm">
+                          {cs.affectedWaybillCount}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3 text-right text-gray-600">{cs.diffCount}</td>
+                      <td className="px-4 py-3 text-right text-gray-900 font-medium">¥{formatAmount(cs.totalAmount)}</td>
+                      <td className="px-4 py-3 text-right text-red-600">-¥{formatAmount(cs.diffAmount)}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-blue-600">¥{formatAmount(cs.payableAmount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {activeTab === 'diffs' && filteredDiffs.length === 0 && (
             <div className="text-center py-16">
               <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto mb-4" />
               <p className="text-gray-500">暂无差异记录</p>
@@ -299,7 +466,9 @@ export const DiffCheck = () => {
 
           <div className="p-4 border-t border-gray-100 flex items-center justify-between">
             <span className="text-sm text-gray-500">
-              共 {filteredDiffs.length} 条差异记录
+              {activeTab === 'diffs' && `共 ${filteredDiffs.length} 条差异记录`}
+              {activeTab === 'waybills' && `共 ${waybillSummaries.length} 个运单`}
+              {activeTab === 'carriers' && `共 ${carrierSummaries.length} 个承运商`}
             </span>
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-500">第 1 页 / 共 1 页</span>

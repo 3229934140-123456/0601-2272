@@ -79,14 +79,6 @@ const billingRules: BillingRule[] = [
 
 const diffTypes: DiffType[] = ['missing_receipt', 'duplicate_waybill', 'exceed_quotation', 'fee_unallocated', 'mileage_mismatch', 'weight_mismatch', 'other'];
 
-const checkRecords: CheckRecord[] = [
-  { id: generateId(), checkBatchNo: 'CHECK20240615001', checkDate: '2024-06-15', totalWaybills: 50, matchedCount: 42, diffCount: 8, status: 'completed', operator: '张会计', totalAmount: 125000, diffAmount: 8500, payableAmount: 116500, diffs: [], carrierSummaries: [] },
-  { id: generateId(), checkBatchNo: 'CHECK20240610002', checkDate: '2024-06-10', totalWaybills: 35, matchedCount: 30, diffCount: 5, status: 'completed', operator: '李出纳', totalAmount: 89000, diffAmount: 5200, payableAmount: 83800, diffs: [], carrierSummaries: [] },
-  { id: generateId(), checkBatchNo: 'CHECK20240605003', checkDate: '2024-06-05', totalWaybills: 42, matchedCount: 38, diffCount: 4, status: 'reviewing', operator: '张会计', totalAmount: 102000, diffAmount: 3800, payableAmount: 98200, diffs: [], carrierSummaries: [] },
-  { id: generateId(), checkBatchNo: 'CHECK20240528004', checkDate: '2024-05-28', totalWaybills: 28, matchedCount: 26, diffCount: 2, status: 'completed', operator: '王主管', totalAmount: 72000, diffAmount: 1500, payableAmount: 70500, diffs: [], carrierSummaries: [] },
-  { id: generateId(), checkBatchNo: 'CHECK20240520005', checkDate: '2024-05-20', totalWaybills: 60, matchedCount: 55, diffCount: 5, status: 'completed', operator: '李出纳', totalAmount: 156000, diffAmount: 6800, payableAmount: 149200, diffs: [], carrierSummaries: [] },
-];
-
 const generateDiffRecords = (checkId: string, waybills: Waybill[]): DiffRecord[] => {
   const diffs: DiffRecord[] = [];
 
@@ -149,6 +141,107 @@ const generateDiffRecords = (checkId: string, waybills: Waybill[]): DiffRecord[]
 
   return diffs;
 };
+
+const buildCheckRecord = (
+  base: Omit<CheckRecord, 'diffs' | 'carrierSummaries' | 'waybillSummaries' | 'waybills' | 'receipts' | 'fuelCardRecords' | 'tollFees' | 'quotations' | 'affectedWaybillCount' | 'reviewedAt' | 'archivedAt'>,
+  sampleWbs: Waybill[]
+): CheckRecord => {
+  const diffs = generateDiffRecords(base.id, sampleWbs);
+  const waybillNoSet = new Set(diffs.map((d) => d.waybillNo));
+  const affectedWaybillCount = waybillNoSet.size;
+
+  const waybillSummaries = sampleWbs.map((wb) => {
+    const wbDiffs = diffs.filter((d) => d.waybillNo === wb.waybillNo);
+    const diffTypesArr = Array.from(new Set(wbDiffs.map((d) => d.diffType)));
+    const diffAmount = wbDiffs
+      .filter((d) => d.status !== 'rejected')
+      .reduce((s, d) => s + d.diffAmount, 0);
+    return {
+      waybillNo: wb.waybillNo,
+      plateNo: wb.plateNo,
+      carrier: wb.carrier,
+      freight: wb.freight,
+      diffCount: wbDiffs.length,
+      diffTypes: diffTypesArr,
+      diffAmount,
+      payableAmount: wb.freight - diffAmount,
+    };
+  });
+
+  type LocalCarrierSummary = {
+    carrier: string;
+    waybillCount: number;
+    affectedWaybillCount: number;
+    diffCount: number;
+    totalAmount: number;
+    diffAmount: number;
+    payableAmount: number;
+  };
+  const carrierMap = new Map<string, LocalCarrierSummary>();
+  sampleWbs.forEach((wb) => {
+    if (!carrierMap.has(wb.carrier)) {
+      carrierMap.set(wb.carrier, {
+        carrier: wb.carrier,
+        waybillCount: 0,
+        affectedWaybillCount: 0,
+        diffCount: 0,
+        totalAmount: 0,
+        diffAmount: 0,
+        payableAmount: 0,
+      });
+    }
+    const cs = carrierMap.get(wb.carrier)!;
+    cs.waybillCount += 1;
+    cs.totalAmount += wb.freight;
+  });
+  waybillSummaries.forEach((ws) => {
+    const cs = carrierMap.get(ws.carrier);
+    if (!cs) return;
+    cs.diffCount += ws.diffCount;
+    cs.diffAmount += ws.diffAmount;
+    cs.payableAmount += ws.payableAmount;
+    if (ws.diffCount > 0) cs.affectedWaybillCount += 1;
+  });
+  const carrierSummaries = Array.from(carrierMap.values());
+
+  return {
+    ...base,
+    affectedWaybillCount,
+    diffs,
+    carrierSummaries,
+    waybillSummaries,
+    waybills: sampleWbs,
+    receipts: receipts.filter((r) => waybillNoSet.has(r.waybillNo)),
+    fuelCardRecords: fuelCardRecords.slice(0, Math.min(10, sampleWbs.length)),
+    tollFees: tollFees.filter((t) => waybillNoSet.has(t.waybillNo)),
+    quotations: quotations.slice(0, 5),
+    reviewedAt: ['reviewed', 'archived'].includes(base.status) ? `${base.checkDate} 15:30` : undefined,
+    archivedAt: base.status === 'archived' ? `${base.checkDate} 16:45` : undefined,
+  };
+};
+
+const checkRecords: CheckRecord[] = [
+  buildCheckRecord(
+    { id: generateId(), checkBatchNo: 'CHECK20240615001', checkDate: '2024-06-15', totalWaybills: 50, matchedCount: 42, diffCount: 8, status: 'archived', operator: '张会计', totalAmount: 125000, diffAmount: 8500, payableAmount: 116500 },
+    waybills
+  ),
+  buildCheckRecord(
+    { id: generateId(), checkBatchNo: 'CHECK20240610002', checkDate: '2024-06-10', totalWaybills: 35, matchedCount: 30, diffCount: 5, status: 'reviewed', operator: '李出纳', totalAmount: 89000, diffAmount: 5200, payableAmount: 83800 },
+    waybills.slice(0, 35)
+  ),
+  buildCheckRecord(
+    { id: generateId(), checkBatchNo: 'CHECK20240605003', checkDate: '2024-06-05', totalWaybills: 42, matchedCount: 38, diffCount: 4, status: 'reviewing', operator: '张会计', totalAmount: 102000, diffAmount: 3800, payableAmount: 98200 },
+    waybills.slice(0, 42)
+  ),
+  buildCheckRecord(
+    { id: generateId(), checkBatchNo: 'CHECK20240528004', checkDate: '2024-05-28', totalWaybills: 28, matchedCount: 26, diffCount: 2, status: 'checking', operator: '王主管', totalAmount: 72000, diffAmount: 1500, payableAmount: 70500 },
+    waybills.slice(0, 28)
+  ),
+  buildCheckRecord(
+    { id: generateId(), checkBatchNo: 'CHECK20240520005', checkDate: '2024-05-20', totalWaybills: 60, matchedCount: 55, diffCount: 5, status: 'pending', operator: '李出纳', totalAmount: 156000, diffAmount: 6800, payableAmount: 149200 },
+    waybills
+  ),
+];
 
 export const mockData = {
   waybills,

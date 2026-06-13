@@ -10,14 +10,180 @@ import {
   CheckRecord,
   CheckSummary,
   CarrierSummary,
+  WaybillSummary,
   ImportFile,
   FileType,
   DiffType,
   DiffStatus,
+  CheckRecordStatus,
+  InvalidRowDetail,
 } from '@/types';
 import { mockData } from '@/data/mockData';
+import { parseExcelFile } from '@/utils/fileParser';
 
 const generateId = () => Math.random().toString(36).substring(2, 11);
+
+export const REQUIRED_FIELDS_BY_TYPE: Record<FileType, string[]> = {
+  waybill: ['运单号', '车牌号', '运费', '承运商'],
+  receipt: ['运单号', '车牌号'],
+  fuelCard: ['卡号', '车牌号', '金额'],
+  tollFee: ['车牌号', '金额'],
+  quotation: ['承运商', '线路', '单价'],
+};
+
+function mapRowByType(type: FileType, row: any): any {
+  switch (type) {
+    case 'waybill':
+      return {
+        id: generateId(),
+        waybillNo: String(row.运单号 || row.waybillNo || '').trim(),
+        plateNo: String(row.车牌号 || row.plateNo || '').trim(),
+        line: String(row.线路 || row.line || '').trim(),
+        vehicleType: String(row.车型 || row.vehicleType || '').trim(),
+        weight: Number(row.重量 || row.weight || 0),
+        mileage: Number(row.里程 || row.mileage || 0),
+        freight: Number(row.运费 || row.freight || 0),
+        carrier: String(row.承运商 || row.carrier || '').trim(),
+        sendDate: String(row.发货日期 || row.sendDate || '').trim(),
+        status: (String(row.状态 || row.status || 'completed') as any),
+      };
+    case 'receipt':
+      return {
+        id: generateId(),
+        waybillNo: String(row.运单号 || row.waybillNo || '').trim(),
+        plateNo: String(row.车牌号 || row.plateNo || '').trim(),
+        receiptDate: String(row.签收日期 || row.receiptDate || '').trim(),
+        receiver: String(row.签收人 || row.receiver || '').trim(),
+        status: (String(row.状态 || row.status || 'confirmed') as any),
+      };
+    case 'fuelCard':
+      return {
+        id: generateId(),
+        cardNo: String(row.卡号 || row.cardNo || '').trim(),
+        plateNo: String(row.车牌号 || row.plateNo || '').trim(),
+        rechargeDate: String(row.充值日期 || row.rechargeDate || '').trim(),
+        amount: Number(row.金额 || row.amount || 0),
+        balance: Number(row.余额 || row.balance || 0),
+      };
+    case 'tollFee':
+      return {
+        id: generateId(),
+        waybillNo: String(row.运单号 || row.waybillNo || '').trim(),
+        plateNo: String(row.车牌号 || row.plateNo || '').trim(),
+        tollDate: String(row.过路费日期 || row.tollDate || '').trim(),
+        amount: Number(row.金额 || row.amount || 0),
+        station: String(row.收费站 || row.station || '').trim(),
+      };
+    case 'quotation':
+      return {
+        id: generateId(),
+        carrier: String(row.承运商 || row.carrier || '').trim(),
+        line: String(row.线路 || row.line || '').trim(),
+        vehicleType: String(row.车型 || row.vehicleType || '通用').trim(),
+        weightMin: Number(row.最小重量 || row.weightMin || 0),
+        weightMax: Number(row.最大重量 || row.weightMax || 9999),
+        unitPrice: Number(row.单价 || row.unitPrice || 0),
+        mileagePrice: Number(row.里程单价 || row.mileagePrice || 0),
+        effectiveDate: String(row.生效日期 || row.effectiveDate || '').trim(),
+      };
+    default:
+      return row;
+  }
+}
+
+function validateRow(type: FileType, mapped: any): { valid: boolean; reason?: string } {
+  switch (type) {
+    case 'waybill':
+      if (!mapped.waybillNo) return { valid: false, reason: '缺少运单号' };
+      if (!mapped.plateNo) return { valid: false, reason: '缺少车牌号' };
+      if (!mapped.freight || mapped.freight <= 0) return { valid: false, reason: '运费无效' };
+      if (!mapped.carrier) return { valid: false, reason: '缺少承运商' };
+      return { valid: true };
+    case 'receipt':
+      if (!mapped.waybillNo) return { valid: false, reason: '缺少运单号' };
+      if (!mapped.plateNo) return { valid: false, reason: '缺少车牌号' };
+      return { valid: true };
+    case 'fuelCard':
+      if (!mapped.cardNo) return { valid: false, reason: '缺少卡号' };
+      if (!mapped.plateNo) return { valid: false, reason: '缺少车牌号' };
+      if (!mapped.amount || mapped.amount <= 0) return { valid: false, reason: '金额无效' };
+      return { valid: true };
+    case 'tollFee':
+      if (!mapped.plateNo) return { valid: false, reason: '缺少车牌号' };
+      if (!mapped.amount || mapped.amount <= 0) return { valid: false, reason: '金额无效' };
+      return { valid: true };
+    case 'quotation':
+      if (!mapped.carrier) return { valid: false, reason: '缺少承运商' };
+      if (!mapped.line) return { valid: false, reason: '缺少线路' };
+      if (!mapped.unitPrice || mapped.unitPrice < 0) return { valid: false, reason: '单价无效' };
+      return { valid: true };
+    default:
+      return { valid: true };
+  }
+}
+
+async function preprocessImportFile(
+  file: File,
+  type: FileType
+): Promise<{
+  headers: string[];
+  validRows: number;
+  invalidRows: number;
+  invalidDetails: InvalidRowDetail[];
+  parsedData: any[];
+  error?: string;
+}> {
+  try {
+    const { headers, rows } = await parseExcelFile(file);
+    const requiredFields = REQUIRED_FIELDS_BY_TYPE[type];
+    const missingRequired = requiredFields.filter((f) => !headers.some((h) => h === f || h.toLowerCase() === f.toLowerCase()));
+
+    if (missingRequired.length > 0) {
+      return {
+        headers,
+        validRows: 0,
+        invalidRows: rows.length,
+        invalidDetails: [],
+        parsedData: [],
+        error: `缺少关键字段：${missingRequired.join('、')}`,
+      };
+    }
+
+    const validData: any[] = [];
+    const invalidDetails: InvalidRowDetail[] = [];
+
+    rows.forEach((row, idx) => {
+      const mapped = mapRowByType(type, row);
+      const check = validateRow(type, mapped);
+      if (check.valid) {
+        validData.push(mapped);
+      } else {
+        invalidDetails.push({
+          rowNo: idx + 2,
+          reason: check.reason || '数据校验失败',
+          fields: row,
+        });
+      }
+    });
+
+    return {
+      headers,
+      validRows: validData.length,
+      invalidRows: invalidDetails.length,
+      invalidDetails,
+      parsedData: validData,
+    };
+  } catch (err: any) {
+    return {
+      headers: [],
+      validRows: 0,
+      invalidRows: 0,
+      invalidDetails: [],
+      parsedData: [],
+      error: `文件解析失败：${err?.message || '格式不支持或文件损坏'}`,
+    };
+  }
+}
 
 interface AppState {
   waybills: Waybill[];
@@ -41,6 +207,8 @@ interface AppState {
   updateImportFile: (id: string, updates: Partial<ImportFile>) => void;
   removeImportFile: (id: string) => void;
   clearImportFiles: () => void;
+  processFileToPreview: (fileId: string, file: File, type: FileType) => Promise<void>;
+  confirmImportPreview: (fileId: string) => void;
 
   setWaybills: (waybills: Waybill[]) => void;
   setReceipts: (receipts: Receipt[]) => void;
@@ -56,6 +224,7 @@ interface AppState {
   runCheck: () => Promise<void>;
   getCheckSummary: () => CheckSummary;
   getCarrierSummaries: () => CarrierSummary[];
+  getWaybillSummaries: () => WaybillSummary[];
 
   setDiffStatus: (id: string, status: DiffStatus, remark?: string, adjustedDiffAmount?: number) => void;
   setBatchDiffStatus: (ids: string[], status: DiffStatus, remark?: string) => void;
@@ -72,6 +241,8 @@ interface AppState {
   saveCheckRecord: () => void;
   loadCheckRecord: (id: string) => void;
   loadHistoryFromDB: () => Promise<void>;
+  markRecordReviewed: (id: string, remark?: string) => void;
+  markRecordArchived: (id: string, remark?: string) => void;
 
   getFilteredDiffs: () => DiffRecord[];
 }
@@ -156,10 +327,9 @@ function runCheckEngine(
     );
 
     if (matchingQuotation) {
-      const expectedFreight = matchingQuotation.unitPrice + wb.weight * matchingQuotation.mileagePrice + wb.mileage * matchingQuotation.mileagePrice;
-      const activeRule = billingRules.find(
-        (r) => r.enabled && (r.line === wb.line || r.line === '通用')
-      );
+      const expectedFreight =
+        matchingQuotation.unitPrice + wb.weight * matchingQuotation.mileagePrice + wb.mileage * matchingQuotation.mileagePrice;
+      const activeRule = billingRules.find((r) => r.enabled && (r.line === wb.line || r.line === '通用'));
       const tolerance = activeRule ? activeRule.tolerance : 5;
 
       if (wb.freight > expectedFreight * (1 + tolerance / 100)) {
@@ -184,9 +354,7 @@ function runCheckEngine(
 
     const plateTollFees = tollFeeByPlate.get(wb.plateNo) || [];
     const plateFuelCards = fuelByPlate.get(wb.plateNo) || [];
-    const unallocatedToll = plateTollFees.filter(
-      (tf) => !tf.waybillNo || tf.waybillNo.trim() === ''
-    );
+    const unallocatedToll = plateTollFees.filter((tf) => !tf.waybillNo || tf.waybillNo.trim() === '');
     const unallocatedFuel = plateFuelCards.filter((fc) => fc.amount > 0);
 
     if (unallocatedToll.length > 0 || unallocatedFuel.length > 0) {
@@ -221,7 +389,51 @@ function runCheckEngine(
   return diffs;
 }
 
-function computeSummary(waybills: Waybill[], diffRecords: DiffRecord[]): CheckSummary {
+function computeWaybillSummaries(waybills: Waybill[], diffRecords: DiffRecord[]): WaybillSummary[] {
+  const byWaybill = new Map<string, WaybillSummary>();
+
+  waybills.forEach((wb) => {
+    byWaybill.set(wb.waybillNo, {
+      waybillNo: wb.waybillNo,
+      plateNo: wb.plateNo,
+      carrier: wb.carrier,
+      freight: wb.freight,
+      diffCount: 0,
+      diffTypes: [],
+      diffAmount: 0,
+      payableAmount: wb.freight,
+    });
+  });
+
+  diffRecords.forEach((d) => {
+    if (!byWaybill.has(d.waybillNo)) {
+      byWaybill.set(d.waybillNo, {
+        waybillNo: d.waybillNo,
+        plateNo: d.plateNo,
+        carrier: d.carrier,
+        freight: d.waybill?.freight || 0,
+        diffCount: 0,
+        diffTypes: [],
+        diffAmount: 0,
+        payableAmount: d.waybill?.freight || 0,
+      });
+    }
+    const s = byWaybill.get(d.waybillNo)!;
+    s.diffCount++;
+    if (!s.diffTypes.includes(d.diffType)) s.diffTypes.push(d.diffType);
+    if (d.status !== 'rejected') {
+      s.diffAmount += d.diffAmount;
+    }
+  });
+
+  byWaybill.forEach((s) => {
+    s.payableAmount = s.freight - s.diffAmount;
+  });
+
+  return Array.from(byWaybill.values()).sort((a, b) => b.diffCount - a.diffCount || b.diffAmount - a.diffAmount);
+}
+
+function computeSummary(waybills: Waybill[], diffRecords: DiffRecord[], waybillSummaries: WaybillSummary[]): CheckSummary {
   const diffByType: Record<DiffType, number> = {
     missing_receipt: 0,
     duplicate_waybill: 0,
@@ -232,59 +444,51 @@ function computeSummary(waybills: Waybill[], diffRecords: DiffRecord[]): CheckSu
     other: 0,
   };
 
-  let effectiveDiffAmount = 0;
   diffRecords.forEach((d) => {
     diffByType[d.diffType]++;
-    if (d.status !== 'rejected') {
-      effectiveDiffAmount += d.diffAmount;
-    }
   });
 
-  const totalAmount = waybills.reduce((sum, w) => sum + w.freight, 0);
-  const matchedCount = waybills.length - diffRecords.length;
+  const totalAmount = waybillSummaries.reduce((s, w) => s + w.freight, 0);
+  const diffAmount = waybillSummaries.reduce((s, w) => s + w.diffAmount, 0);
+  const affectedWaybillCount = waybillSummaries.filter((w) => w.diffCount > 0).length;
+  const matchedCount = waybillSummaries.length - affectedWaybillCount;
 
   return {
-    totalWaybills: waybills.length,
+    totalWaybills: waybillSummaries.length,
     matchedCount,
     diffCount: diffRecords.length,
+    affectedWaybillCount,
     diffByType,
     totalAmount,
-    diffAmount: effectiveDiffAmount,
-    payableAmount: totalAmount - effectiveDiffAmount,
+    diffAmount,
+    payableAmount: totalAmount - diffAmount,
   };
 }
 
-function computeCarrierSummaries(waybills: Waybill[], diffRecords: DiffRecord[]): CarrierSummary[] {
+function computeCarrierSummaries(waybillSummaries: WaybillSummary[]): CarrierSummary[] {
   const carrierMap = new Map<string, CarrierSummary>();
 
-  waybills.forEach((wb) => {
-    if (!carrierMap.has(wb.carrier)) {
-      carrierMap.set(wb.carrier, {
-        carrier: wb.carrier,
+  waybillSummaries.forEach((ws) => {
+    if (!carrierMap.has(ws.carrier)) {
+      carrierMap.set(ws.carrier, {
+        carrier: ws.carrier,
         waybillCount: 0,
         totalAmount: 0,
         diffCount: 0,
+        affectedWaybillCount: 0,
         diffAmount: 0,
         payableAmount: 0,
       });
     }
-    const summary = carrierMap.get(wb.carrier)!;
-    summary.waybillCount++;
-    summary.totalAmount += wb.freight;
-  });
-
-  diffRecords.forEach((d) => {
-    if (carrierMap.has(d.carrier)) {
-      const summary = carrierMap.get(d.carrier)!;
-      summary.diffCount++;
-      if (d.status !== 'rejected') {
-        summary.diffAmount += d.diffAmount;
-      }
+    const s = carrierMap.get(ws.carrier)!;
+    s.waybillCount++;
+    s.totalAmount += ws.freight;
+    s.diffAmount += ws.diffAmount;
+    s.payableAmount += ws.payableAmount;
+    if (ws.diffCount > 0) {
+      s.affectedWaybillCount++;
+      s.diffCount += ws.diffCount;
     }
-  });
-
-  carrierMap.forEach((s) => {
-    s.payableAmount = s.totalAmount - s.diffAmount;
   });
 
   return Array.from(carrierMap.values()).sort((a, b) => b.totalAmount - a.totalAmount);
@@ -325,7 +529,7 @@ async function loadAllFromIndexedDB(): Promise<CheckRecord[]> {
     const request = tx.objectStore(STORE_NAME).getAll();
     request.onsuccess = () => {
       const records = request.result as CheckRecord[];
-      records.sort((a, b) => b.checkDate.localeCompare(a.checkDate));
+      records.sort((a, b) => (b.archivedAt || b.reviewedAt || b.checkDate).localeCompare(a.archivedAt || a.reviewedAt || a.checkDate));
       resolve(records);
     };
     request.onerror = () => reject(request.error);
@@ -375,6 +579,55 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   clearImportFiles: () => set({ importFiles: [] }),
 
+  processFileToPreview: async (fileId, file, type) => {
+    const result = await preprocessImportFile(file, type);
+
+    if (result.error) {
+      get().updateImportFile(fileId, {
+        status: 'error',
+        errorMessage: result.error,
+        headers: result.headers,
+      });
+      return;
+    }
+
+    get().updateImportFile(fileId, {
+      status: 'preview',
+      headers: result.headers,
+      validRows: result.validRows,
+      invalidRows: result.invalidRows,
+      invalidDetails: result.invalidDetails,
+      parsedData: result.parsedData,
+      progress: 100,
+      rows: result.validRows + result.invalidRows,
+    });
+  },
+
+  confirmImportPreview: (fileId) => {
+    const file = get().importFiles.find((f) => f.id === fileId);
+    if (!file || file.status !== 'preview' || !file.parsedData) return;
+
+    switch (file.type) {
+      case 'waybill':
+        get().setWaybills([...get().waybills, ...file.parsedData]);
+        break;
+      case 'receipt':
+        get().setReceipts([...get().receipts, ...file.parsedData]);
+        break;
+      case 'fuelCard':
+        get().setFuelCardRecords([...get().fuelCardRecords, ...file.parsedData]);
+        break;
+      case 'tollFee':
+        get().setTollFees([...get().tollFees, ...file.parsedData]);
+        break;
+      case 'quotation':
+        get().setQuotations([...get().quotations, ...file.parsedData]);
+        break;
+    }
+
+    get().updateImportFile(fileId, { status: 'success', parsedData: undefined });
+  },
+
   setWaybills: (waybills) => set({ waybills }),
   setReceipts: (receipts) => set({ receipts }),
   setFuelCardRecords: (fuelCardRecords) => set({ fuelCardRecords }),
@@ -395,9 +648,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   toggleBillingRule: (id) =>
     set((state) => ({
-      billingRules: state.billingRules.map((r) =>
-        r.id === id ? { ...r, enabled: !r.enabled } : r
-      ),
+      billingRules: state.billingRules.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r)),
     })),
 
   runCheck: async () => {
@@ -411,17 +662,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       diffRecords: diffs,
       currentCheckId: checkId,
       selectedDiffIds: [],
+      currentStep: 2,
     });
   },
 
   getCheckSummary: () => {
     const { waybills, diffRecords } = get();
-    return computeSummary(waybills, diffRecords);
+    const waybillSummaries = computeWaybillSummaries(waybills, diffRecords);
+    return computeSummary(waybills, diffRecords, waybillSummaries);
   },
 
   getCarrierSummaries: () => {
     const { waybills, diffRecords } = get();
-    return computeCarrierSummaries(waybills, diffRecords);
+    const waybillSummaries = computeWaybillSummaries(waybills, diffRecords);
+    return computeCarrierSummaries(waybillSummaries);
+  },
+
+  getWaybillSummaries: () => {
+    const { waybills, diffRecords } = get();
+    return computeWaybillSummaries(waybills, diffRecords);
   },
 
   setDiffStatus: (id, status, remark, adjustedDiffAmount) =>
@@ -481,9 +740,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSearchKeyword: (keyword) => set({ searchKeyword: keyword, selectedDiffIds: [] }),
 
   saveCheckRecord: () => {
-    const { getCheckSummary, currentCheckId, diffRecords, waybills } = get();
+    const {
+      getCheckSummary,
+      getWaybillSummaries,
+      getCarrierSummaries,
+      currentCheckId,
+      diffRecords,
+      waybills,
+      receipts,
+      fuelCardRecords,
+      tollFees,
+      quotations,
+    } = get();
     const summary = getCheckSummary();
-    const carrierSummaries = computeCarrierSummaries(waybills, diffRecords);
+    const waybillSummaries = getWaybillSummaries();
+    const carrierSummaries = getCarrierSummaries();
     const now = new Date().toISOString().split('T')[0];
 
     const record: CheckRecord = {
@@ -493,40 +764,51 @@ export const useAppStore = create<AppState>((set, get) => ({
       totalWaybills: summary.totalWaybills,
       matchedCount: summary.matchedCount,
       diffCount: summary.diffCount,
+      affectedWaybillCount: summary.affectedWaybillCount,
       status: 'reviewing',
       operator: '当前用户',
       totalAmount: summary.totalAmount,
       diffAmount: summary.diffAmount,
       payableAmount: summary.payableAmount,
       diffs: diffRecords,
+      waybillSummaries,
       carrierSummaries,
+      waybills,
+      receipts,
+      fuelCardRecords,
+      tollFees,
+      quotations,
     };
 
     saveToIndexedDB(record);
 
     set((state) => ({
-      checkRecords: [record, ...state.checkRecords],
+      checkRecords: [record, ...state.checkRecords.filter((r) => r.id !== record.id)],
+      currentStep: 3,
     }));
   },
 
   loadCheckRecord: (id) => {
-    const record = get().checkRecords.find((r) => r.id === id);
-    if (record && record.diffs) {
+    const applyRecord = (rec: CheckRecord) => {
+      if (!rec) return;
       set({
-        diffRecords: record.diffs,
-        currentCheckId: record.id,
+        diffRecords: rec.diffs || [],
+        currentCheckId: rec.id,
         selectedDiffIds: [],
+        waybills: rec.waybills || [],
+        receipts: rec.receipts || [],
+        fuelCardRecords: rec.fuelCardRecords || [],
+        tollFees: rec.tollFees || [],
+        quotations: rec.quotations || [],
+        currentStep: 3,
       });
+    };
+
+    const inMem = get().checkRecords.find((r) => r.id === id);
+    if (inMem && inMem.diffs) {
+      applyRecord(inMem);
     } else {
-      loadOneFromIndexedDB(id).then((rec) => {
-        if (rec && rec.diffs) {
-          set({
-            diffRecords: rec.diffs,
-            currentCheckId: rec.id,
-            selectedDiffIds: [],
-          });
-        }
-      });
+      loadOneFromIndexedDB(id).then(applyRecord);
     }
   },
 
@@ -534,6 +816,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     const records = await loadAllFromIndexedDB();
     set({ checkRecords: records });
   },
+
+  markRecordReviewed: (id, remark) =>
+    set((state) => {
+      const now = new Date().toLocaleString('zh-CN');
+      const updated = state.checkRecords.map((r) =>
+        r.id === id
+          ? ({ ...r, status: 'reviewed' as CheckRecordStatus, reviewedAt: now, remark: remark || r.remark } as CheckRecord)
+          : r
+      );
+      updated.forEach((rec) => {
+        if (rec.id === id) saveToIndexedDB(rec);
+      });
+      return { checkRecords: updated };
+    }),
+
+  markRecordArchived: (id, remark) =>
+    set((state) => {
+      const now = new Date().toLocaleString('zh-CN');
+      const updated = state.checkRecords.map((r) =>
+        r.id === id
+          ? ({ ...r, status: 'archived' as CheckRecordStatus, archivedAt: now, remark: remark || r.remark } as CheckRecord)
+          : r
+      );
+      updated.forEach((rec) => {
+        if (rec.id === id) saveToIndexedDB(rec);
+      });
+      return { checkRecords: updated };
+    }),
 
   getFilteredDiffs: () => {
     const { diffRecords, filterDiffType, filterDiffStatus, searchKeyword } = get();
