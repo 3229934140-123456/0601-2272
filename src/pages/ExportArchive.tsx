@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Download,
   Archive,
@@ -16,6 +16,9 @@ import {
   FileCheck,
   Truck,
   Building2,
+  GitCompareArrows,
+  Filter,
+  X,
 } from 'lucide-react';
 import { StepIndicator } from '@/components/StepIndicator';
 import { Button } from '@/components/Button';
@@ -25,15 +28,60 @@ import { exportReconciliation, exportDiffRecords } from '@/utils/exporter';
 import { formatAmount } from '@/utils/fileParser';
 import {
   CheckRecord,
+  CheckRecordStatus,
   DIFF_TYPE_LABELS,
   DIFF_TYPE_COLORS,
   DIFF_STATUS_LABELS,
   DIFF_STATUS_COLORS,
   CHECK_RECORD_STATUS_LABELS,
   CHECK_RECORD_STATUS_COLORS,
+  WaybillSummary,
+  CarrierSummary,
 } from '@/types';
 
 const steps = ['文件导入', '规则设置', '差异核对', '结果复核', '导出归档'];
+
+type DetailTab =
+  | 'overview'
+  | 'diffs'
+  | 'waybills'
+  | 'carriers'
+  | 'rawWaybills'
+  | 'rawReceipts'
+  | 'rawFuel'
+  | 'rawToll'
+  | 'rawQuotation';
+
+type CompareDim = 'carrier' | 'line' | 'diffType';
+
+const resolveWaybillFinalStatus = (statuses: string[]): string => {
+  if (statuses.length === 0) return '正常';
+  if (statuses.includes('adjusted')) return '已调整';
+  if (statuses.includes('rejected')) return '已驳回';
+  if (statuses.includes('confirmed')) return '已确认';
+  if (statuses.includes('pending')) return '待处理';
+  return '正常';
+};
+
+interface CarrierCompareRow {
+  key: string;
+  label: string;
+  waybillCountA: number;
+  waybillCountB: number;
+  diffAmountA: number;
+  diffAmountB: number;
+  payableAmountA: number;
+  payableAmountB: number;
+}
+
+interface DiffTypeCompareRow {
+  key: string;
+  label: string;
+  countA: number;
+  countB: number;
+  diffAmountA: number;
+  diffAmountB: number;
+}
 
 export const ExportArchive = () => {
   const {
@@ -47,12 +95,23 @@ export const ExportArchive = () => {
     loadHistoryFromDB,
     markRecordArchived,
   } = useAppStore();
+
   const [searchKeyword, setSearchKeyword] = useState('');
+  const [filterStatus, setFilterStatus] = useState<CheckRecordStatus | 'all'>('all');
+  const [filterCarrier, setFilterCarrier] = useState<string>('all');
+  const [filterStartDate, setFilterStartDate] = useState<string>('');
+  const [filterEndDate, setFilterEndDate] = useState<string>('');
+
   const [selectedRecord, setSelectedRecord] = useState<CheckRecord | null>(null);
   const [showDetail, setShowDetail] = useState(false);
-  const [activeDetailTab, setActiveDetailTab] = useState<'overview' | 'diffs' | 'waybills' | 'carriers'>('overview');
+  const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>('overview');
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
   const [archiveRemark, setArchiveRemark] = useState('');
+
+  const [showCompareDialog, setShowCompareDialog] = useState(false);
+  const [compareBatchA, setCompareBatchA] = useState<string>('');
+  const [compareBatchB, setCompareBatchB] = useState<string>('');
+  const [compareDim, setCompareDim] = useState<CompareDim>('carrier');
 
   useEffect(() => {
     loadHistoryFromDB();
@@ -61,18 +120,56 @@ export const ExportArchive = () => {
   const summary = getCheckSummary();
   const carrierSummaries = getCarrierSummaries();
 
-  const filteredRecords = checkRecords.filter(
-    (r) =>
-      r.checkBatchNo.toLowerCase().includes(searchKeyword.toLowerCase()) ||
-      r.operator.includes(searchKeyword)
-  );
+  const allCarriers = useMemo(() => {
+    const set = new Set<string>();
+    checkRecords.forEach((r) => {
+      r.carrierSummaries?.forEach((cs) => set.add(cs.carrier));
+    });
+    return Array.from(set).sort();
+  }, [checkRecords]);
+
+  const filteredRecords = useMemo(() => {
+    return checkRecords.filter((r) => {
+      if (searchKeyword) {
+        const kw = searchKeyword.toLowerCase();
+        const matchKw =
+          r.checkBatchNo.toLowerCase().includes(kw) ||
+          r.operator.includes(kw);
+        if (!matchKw) return false;
+      }
+      if (filterStatus !== 'all' && r.status !== filterStatus) return false;
+      if (filterCarrier !== 'all') {
+        const hasCarrier = r.carrierSummaries?.some((cs) => cs.carrier === filterCarrier);
+        if (!hasCarrier) return false;
+      }
+      if (filterStartDate) {
+        if (r.checkDate < filterStartDate) return false;
+      }
+      if (filterEndDate) {
+        if (r.checkDate > filterEndDate) return false;
+      }
+      return true;
+    });
+  }, [checkRecords, searchKeyword, filterStatus, filterCarrier, filterStartDate, filterEndDate]);
+
+  const resetFilters = () => {
+    setSearchKeyword('');
+    setFilterStatus('all');
+    setFilterCarrier('all');
+    setFilterStartDate('');
+    setFilterEndDate('');
+  };
 
   const handleExportAll = () => {
     const filename = `对账报表_${new Date().toISOString().slice(0, 10)}`;
     const ws = getWaybillSummaries();
     const cs = getCarrierSummaries();
     const s = getCheckSummary();
-    exportReconciliation(waybills, diffRecords, s, cs, filename, ws);
+    const receipts = useAppStore.getState().receipts;
+    const fuelCardRecords = useAppStore.getState().fuelCardRecords;
+    const tollFees = useAppStore.getState().tollFees;
+    const quotations = useAppStore.getState().quotations;
+    exportReconciliation(waybills, diffRecords, s, cs, filename, ws, receipts, fuelCardRecords, tollFees, quotations);
   };
 
   const handleExportDiffs = () => {
@@ -87,8 +184,8 @@ export const ExportArchive = () => {
     loadCheckRecord(record.id);
   };
 
-  const handleExportRecord = (record: CheckRecord, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleExportRecord = (record: CheckRecord, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     const filename = `对账报表_${record.checkBatchNo}`;
     const recSummary = {
       totalWaybills: record.totalWaybills,
@@ -100,11 +197,18 @@ export const ExportArchive = () => {
       diffAmount: record.diffAmount,
       payableAmount: record.payableAmount,
     };
-    const recCarrierSummaries = record.carrierSummaries || [];
-    const recWaybillSummaries = record.waybillSummaries || [];
-    const recDiffs = record.diffs || [];
-    const recWaybills = record.waybills || [];
-    exportReconciliation(recWaybills, recDiffs, recSummary, recCarrierSummaries, filename, recWaybillSummaries);
+    exportReconciliation(
+      record.waybills || [],
+      record.diffs || [],
+      recSummary,
+      record.carrierSummaries || [],
+      filename,
+      record.waybillSummaries || [],
+      record.receipts || [],
+      record.fuelCardRecords || [],
+      record.tollFees || [],
+      record.quotations || []
+    );
   };
 
   const handleConfirmArchive = () => {
@@ -124,6 +228,101 @@ export const ExportArchive = () => {
     setArchiveRemark('');
   };
 
+  const compareResult = useMemo(() => {
+    const recA = checkRecords.find((r) => r.id === compareBatchA);
+    const recB = checkRecords.find((r) => r.id === compareBatchB);
+    if (!recA || !recB) return null;
+
+    if (compareDim === 'carrier') {
+      const carrierMap = new Map<string, CarrierCompareRow>();
+      const buildRow = (r: CheckRecord, side: 'A' | 'B') => {
+        (r.carrierSummaries || []).forEach((cs: CarrierSummary) => {
+          if (!carrierMap.has(cs.carrier)) {
+            carrierMap.set(cs.carrier, {
+              key: cs.carrier,
+              label: cs.carrier,
+              waybillCountA: 0,
+              waybillCountB: 0,
+              diffAmountA: 0,
+              diffAmountB: 0,
+              payableAmountA: 0,
+              payableAmountB: 0,
+            });
+          }
+          const row = carrierMap.get(cs.carrier)!;
+          if (side === 'A') {
+            row.waybillCountA = cs.waybillCount;
+            row.diffAmountA = cs.diffAmount;
+            row.payableAmountA = cs.payableAmount;
+          } else {
+            row.waybillCountB = cs.waybillCount;
+            row.diffAmountB = cs.diffAmount;
+            row.payableAmountB = cs.payableAmount;
+          }
+        });
+      };
+      buildRow(recA, 'A');
+      buildRow(recB, 'B');
+      return { type: 'carrier' as const, rows: Array.from(carrierMap.values()) };
+    }
+
+    if (compareDim === 'line') {
+      const lineMap = new Map<
+        string,
+        { key: string; label: string; waybillCountA: number; waybillCountB: number; payableA: number; payableB: number }
+      >();
+      const build = (r: CheckRecord, side: 'A' | 'B') => {
+        const wbMap = new Map<string, WaybillSummary>();
+        (r.waybillSummaries || []).forEach((ws) => wbMap.set(ws.waybillNo, ws));
+        (r.waybills || []).forEach((w) => {
+          const key = w.line || '未填线路';
+          if (!lineMap.has(key)) {
+            lineMap.set(key, { key, label: key, waybillCountA: 0, waybillCountB: 0, payableA: 0, payableB: 0 });
+          }
+          const row = lineMap.get(key)!;
+          const ws = wbMap.get(w.waybillNo);
+          if (side === 'A') {
+            row.waybillCountA += 1;
+            row.payableA += ws?.payableAmount ?? w.freight;
+          } else {
+            row.waybillCountB += 1;
+            row.payableB += ws?.payableAmount ?? w.freight;
+          }
+        });
+      };
+      build(recA, 'A');
+      build(recB, 'B');
+      return { type: 'line' as const, rows: Array.from(lineMap.values()) };
+    }
+
+    const diffMap = new Map<string, DiffTypeCompareRow>();
+    const build = (r: CheckRecord, side: 'A' | 'B') => {
+      (r.diffs || []).forEach((d) => {
+        const key = d.diffType;
+        const label = (DIFF_TYPE_LABELS as any)[key] || key;
+        if (!diffMap.has(key)) {
+          diffMap.set(key, { key, label, countA: 0, countB: 0, diffAmountA: 0, diffAmountB: 0 });
+        }
+        const row = diffMap.get(key)!;
+        if (side === 'A') {
+          row.countA += 1;
+          row.diffAmountA += d.diffAmount;
+        } else {
+          row.countB += 1;
+          row.diffAmountB += d.diffAmount;
+        }
+      });
+    };
+    build(recA, 'A');
+    build(recB, 'B');
+    return { type: 'diffType' as const, rows: Array.from(diffMap.values()) };
+  }, [compareBatchA, compareBatchB, compareDim, checkRecords]);
+
+  const deltaPct = (a: number, b: number) => {
+    if (a === 0) return b === 0 ? 0 : 100;
+    return Math.round(((b - a) / a) * 1000) / 10;
+  };
+
   return (
     <div className="p-8">
       <div className="mb-8">
@@ -135,7 +334,7 @@ export const ExportArchive = () => {
         <StepIndicator steps={steps} currentStep={4} />
       </div>
 
-      <div className="grid grid-cols-3 gap-6 mb-8">
+      <div className="grid grid-cols-4 gap-6 mb-8">
         <div className="col-span-1">
           <div className="bg-gradient-to-br from-blue-600 to-blue-700 rounded-xl p-6 text-white shadow-lg shadow-blue-600/20">
             <div className="flex items-center gap-3 mb-4">
@@ -148,7 +347,7 @@ export const ExportArchive = () => {
               </div>
             </div>
             <p className="text-blue-100 text-sm mb-4">
-              包含运单明细、差异明细、按运单汇总、按承运商汇总的完整Excel报表
+              包含原始五类数据、差异明细、按运单汇总、按承运商汇总的完整Excel
             </p>
             <Button
               variant="secondary"
@@ -213,23 +412,103 @@ export const ExportArchive = () => {
             </Button>
           </div>
         </div>
+
+        <div className="col-span-1">
+          <div className="bg-gradient-to-br from-purple-500 to-indigo-600 rounded-xl p-6 text-white shadow-lg shadow-purple-500/20 cursor-pointer" onClick={() => setShowCompareDialog(true)}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
+                <GitCompareArrows className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-semibold">批次对比</h3>
+                <p className="text-purple-100 text-sm">双批次波动分析</p>
+              </div>
+            </div>
+            <p className="text-purple-100 text-sm mb-4">
+              选择两个批次，按承运商、线路、差异类型查看波动
+            </p>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={GitCompareArrows}
+              className="w-full bg-white text-purple-600 hover:bg-purple-50"
+              onClick={(e) => { e.stopPropagation(); setShowCompareDialog(true); }}
+            >
+              开始对比
+            </Button>
+          </div>
+        </div>
       </div>
 
       <div id="history-section" className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-        <div className="p-4 border-b border-gray-100 flex items-center justify-between">
-          <div>
-            <h2 className="font-semibold text-gray-900">历史核对记录</h2>
-            <p className="text-sm text-gray-500 mt-0.5">所有核对记录永久保存，支持追溯查询与归档操作</p>
+        <div className="p-4 border-b border-gray-100">
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div>
+              <h2 className="font-semibold text-gray-900">历史核对记录</h2>
+              <p className="text-sm text-gray-500 mt-0.5">所有核对记录永久保存，支持追溯查询与归档操作</p>
+            </div>
           </div>
-          <div className="relative">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="搜索批次号、操作人..."
-              value={searchKeyword}
-              onChange={(e) => setSearchKeyword(e.target.value)}
-              className="pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm w-64 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-            />
+
+          <div className="mt-4 flex items-center gap-3 flex-wrap">
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="搜索批次号、操作人..."
+                value={searchKeyword}
+                onChange={(e) => setSearchKeyword(e.target.value)}
+                className="pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm w-60 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-gray-400" />
+              <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value as CheckRecordStatus | 'all')}
+                className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
+              >
+                <option value="all">全部状态</option>
+                {(Object.keys(CHECK_RECORD_STATUS_LABELS) as CheckRecordStatus[]).map((s) => (
+                  <option key={s} value={s}>{CHECK_RECORD_STATUS_LABELS[s]}</option>
+                ))}
+              </select>
+            </div>
+
+            <select
+              value={filterCarrier}
+              onChange={(e) => setFilterCarrier(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
+            >
+              <option value="all">全部承运商</option>
+              {allCarriers.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={filterStartDate}
+                onChange={(e) => setFilterStartDate(e.target.value)}
+                className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
+              />
+              <span className="text-gray-400 text-sm">至</span>
+              <input
+                type="date"
+                value={filterEndDate}
+                onChange={(e) => setFilterEndDate(e.target.value)}
+                className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
+              />
+            </div>
+
+            <Button variant="outline" size="sm" icon={X} onClick={resetFilters}>
+              重置
+            </Button>
+
+            <span className="text-sm text-gray-400 ml-auto">
+              共 {filteredRecords.length} 条记录
+            </span>
           </div>
         </div>
 
@@ -271,6 +550,12 @@ export const ExportArchive = () => {
                         <Clock className="w-3.5 h-3.5" />
                         操作人：{record.operator}
                       </span>
+                      {record.carrierSummaries && record.carrierSummaries.length > 0 && (
+                        <span className="flex items-center gap-1">
+                          <Building2 className="w-3.5 h-3.5" />
+                          {record.carrierSummaries.length} 家承运商
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-6 mt-3">
                       <div>
@@ -327,7 +612,7 @@ export const ExportArchive = () => {
         {filteredRecords.length === 0 && (
           <div className="text-center py-16">
             <Archive className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-            <p className="text-gray-500">暂无历史记录</p>
+            <p className="text-gray-500">暂无符合条件的历史记录</p>
           </div>
         )}
       </div>
@@ -340,7 +625,7 @@ export const ExportArchive = () => {
 
       {showDetail && selectedRecord && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-2xl flex flex-col">
+          <div className="bg-white rounded-xl w-full max-w-5xl max-h-[92vh] overflow-hidden shadow-2xl flex flex-col">
             <div className="p-6 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
               <div>
                 <div className="flex items-center gap-3">
@@ -355,27 +640,32 @@ export const ExportArchive = () => {
                 onClick={() => setShowDetail(false)}
                 className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
               >
-                <svg className="w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                <X className="w-5 h-5 text-gray-400" />
               </button>
             </div>
 
-            <div className="px-6 pt-4 border-b border-gray-100 flex items-center gap-2 flex-shrink-0">
-              {(['overview', 'diffs', 'waybills', 'carriers'] as const).map((tab) => (
+            <div className="px-6 pt-4 border-b border-gray-100 flex items-center gap-1 flex-shrink-0 flex-wrap">
+              {([
+                ['overview', '概览'],
+                ['diffs', `差异明细 (${selectedRecord.diffs?.length || 0})`],
+                ['waybills', `按运单 (${selectedRecord.waybillSummaries?.length || 0})`],
+                ['carriers', `按承运商 (${selectedRecord.carrierSummaries?.length || 0})`],
+                ['rawWaybills', `原始运单 (${selectedRecord.waybills?.length || 0})`],
+                ['rawReceipts', `原始回单 (${selectedRecord.receipts?.length || 0})`],
+                ['rawFuel', `原始油卡 (${selectedRecord.fuelCardRecords?.length || 0})`],
+                ['rawToll', `原始过路费 (${selectedRecord.tollFees?.length || 0})`],
+                ['rawQuotation', `原始报价 (${selectedRecord.quotations?.length || 0})`],
+              ] as [DetailTab, string][]).map(([tab, label]) => (
                 <button
                   key={tab}
                   onClick={() => setActiveDetailTab(tab)}
-                  className={`px-4 py-2 text-sm rounded-t-lg font-medium transition-colors ${
+                  className={`px-3 py-2 text-sm rounded-t-lg font-medium transition-colors whitespace-nowrap ${
                     activeDetailTab === tab
                       ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600'
                       : 'text-gray-500 hover:bg-gray-50'
                   }`}
                 >
-                  {tab === 'overview' && '概览'}
-                  {tab === 'diffs' && `差异明细 (${selectedRecord.diffs?.length || 0})`}
-                  {tab === 'waybills' && `按运单 (${selectedRecord.waybillSummaries?.length || 0})`}
-                  {tab === 'carriers' && `按承运商 (${selectedRecord.carrierSummaries?.length || 0})`}
+                  {label}
                 </button>
               ))}
             </div>
@@ -462,7 +752,7 @@ export const ExportArchive = () => {
               {activeDetailTab === 'diffs' && selectedRecord.diffs && selectedRecord.diffs.length > 0 && (
                 <div className="border border-gray-200 rounded-lg overflow-hidden">
                   <table className="w-full text-sm">
-                    <thead>
+                    <thead className="sticky top-0 bg-gray-50">
                       <tr className="bg-gray-50">
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">运单号</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">问题类型</th>
@@ -497,7 +787,7 @@ export const ExportArchive = () => {
               {activeDetailTab === 'waybills' && selectedRecord.waybillSummaries && selectedRecord.waybillSummaries.length > 0 && (
                 <div className="border border-gray-200 rounded-lg overflow-hidden">
                   <table className="w-full text-sm">
-                    <thead>
+                    <thead className="sticky top-0 bg-gray-50">
                       <tr className="bg-gray-50">
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">运单号</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">车牌号</th>
@@ -505,43 +795,67 @@ export const ExportArchive = () => {
                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">运费</th>
                         <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">差异数</th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">问题类型</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">差异金额</th>
                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">应付金额</th>
+                        <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">最终状态</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {selectedRecord.waybillSummaries.map((ws) => (
-                        <tr key={ws.waybillNo} className="hover:bg-gray-50">
-                          <td className="px-3 py-2 font-medium text-gray-900">{ws.waybillNo}</td>
-                          <td className="px-3 py-2 text-gray-600">{ws.plateNo}</td>
-                          <td className="px-3 py-2 text-gray-600">{ws.carrier}</td>
-                          <td className="px-3 py-2 text-right text-gray-900">¥{formatAmount(ws.freight)}</td>
-                          <td className="px-3 py-2 text-center">
-                            <Badge
-                              className={
-                                ws.diffCount > 0
-                                  ? 'bg-amber-100 text-amber-700 border-amber-200'
-                                  : 'bg-emerald-100 text-emerald-700 border-emerald-200'
-                              }
-                              size="sm"
-                            >
-                              {ws.diffCount > 0 ? `${ws.diffCount} 条` : '无'}
-                            </Badge>
-                          </td>
-                          <td className="px-3 py-2">
-                            <div className="flex flex-wrap gap-1">
-                              {ws.diffTypes.map((t) => (
-                                <Badge key={t} className={DIFF_TYPE_COLORS[t]} size="sm">
-                                  {DIFF_TYPE_LABELS[t]}
-                                </Badge>
-                              ))}
-                              {ws.diffTypes.length === 0 && <span className="text-gray-400 text-xs">-</span>}
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 text-right font-semibold text-blue-600">
-                            ¥{formatAmount(ws.payableAmount)}
-                          </td>
-                        </tr>
-                      ))}
+                      {selectedRecord.waybillSummaries.map((ws) => {
+                        const wbDiffs = (selectedRecord.diffs || []).filter((d) => d.waybillNo === ws.waybillNo);
+                        const finalStatus = resolveWaybillFinalStatus(wbDiffs.map((d) => d.status));
+                        const statusColor =
+                          finalStatus === '已调整'
+                            ? DIFF_STATUS_COLORS.adjusted
+                            : finalStatus === '已驳回'
+                            ? DIFF_STATUS_COLORS.rejected
+                            : finalStatus === '已确认'
+                            ? DIFF_STATUS_COLORS.confirmed
+                            : finalStatus === '待处理'
+                            ? DIFF_STATUS_COLORS.pending
+                            : 'bg-emerald-50 text-emerald-600 border-emerald-200';
+                        return (
+                          <tr key={ws.waybillNo} className="hover:bg-gray-50">
+                            <td className="px-3 py-2 font-medium text-gray-900">{ws.waybillNo}</td>
+                            <td className="px-3 py-2 text-gray-600">{ws.plateNo}</td>
+                            <td className="px-3 py-2 text-gray-600">{ws.carrier}</td>
+                            <td className="px-3 py-2 text-right text-gray-900">¥{formatAmount(ws.freight)}</td>
+                            <td className="px-3 py-2 text-center">
+                              <Badge
+                                className={
+                                  ws.diffCount > 0
+                                    ? 'bg-amber-100 text-amber-700 border-amber-200'
+                                    : 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                                }
+                                size="sm"
+                              >
+                                {ws.diffCount > 0 ? `${ws.diffCount} 条` : '无'}
+                              </Badge>
+                            </td>
+                            <td className="px-3 py-2">
+                              <div className="flex flex-wrap gap-1">
+                                {ws.diffTypes.map((t) => (
+                                  <Badge key={t} className={DIFF_TYPE_COLORS[t]} size="sm">
+                                    {DIFF_TYPE_LABELS[t]}
+                                  </Badge>
+                                ))}
+                                {ws.diffTypes.length === 0 && <span className="text-gray-400 text-xs">-</span>}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-right text-red-600">
+                              {ws.diffAmount > 0 ? `-¥${formatAmount(ws.diffAmount)}` : '-'}
+                            </td>
+                            <td className="px-3 py-2 text-right font-semibold text-blue-600">
+                              ¥{formatAmount(ws.payableAmount)}
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <Badge className={statusColor} size="sm">
+                                {finalStatus}
+                              </Badge>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -550,7 +864,7 @@ export const ExportArchive = () => {
               {activeDetailTab === 'carriers' && selectedRecord.carrierSummaries && selectedRecord.carrierSummaries.length > 0 && (
                 <div className="border border-gray-200 rounded-lg overflow-hidden">
                   <table className="w-full text-sm">
-                    <thead>
+                    <thead className="sticky top-0 bg-gray-50">
                       <tr className="bg-gray-50">
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">承运商</th>
                         <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">运单数</th>
@@ -590,6 +904,166 @@ export const ExportArchive = () => {
                   </table>
                 </div>
               )}
+
+              {activeDetailTab === 'rawWaybills' && selectedRecord.waybills && selectedRecord.waybills.length > 0 && (
+                <div className="border border-gray-200 rounded-lg overflow-hidden max-h-[60vh]">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-gray-50 z-10">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">运单号</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">车牌号</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">线路</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">车型</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">重量</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">里程</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">运费</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">承运商</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">发运日期</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {selectedRecord.waybills.map((w) => (
+                        <tr key={w.id} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 font-medium text-gray-900">{w.waybillNo}</td>
+                          <td className="px-3 py-2 text-gray-600">{w.plateNo}</td>
+                          <td className="px-3 py-2 text-gray-600">{w.line}</td>
+                          <td className="px-3 py-2 text-gray-600">{w.vehicleType}</td>
+                          <td className="px-3 py-2 text-right text-gray-600">{w.weight}</td>
+                          <td className="px-3 py-2 text-right text-gray-600">{w.mileage}</td>
+                          <td className="px-3 py-2 text-right text-gray-900">¥{formatAmount(w.freight)}</td>
+                          <td className="px-3 py-2 text-gray-600">{w.carrier}</td>
+                          <td className="px-3 py-2 text-gray-600">{w.sendDate}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {activeDetailTab === 'rawReceipts' && selectedRecord.receipts && selectedRecord.receipts.length > 0 && (
+                <div className="border border-gray-200 rounded-lg overflow-hidden max-h-[60vh]">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-gray-50 z-10">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">运单号</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">车牌号</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">回单日期</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">收货人</th>
+                        <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">状态</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {selectedRecord.receipts.map((r) => (
+                        <tr key={r.id} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 font-medium text-gray-900">{r.waybillNo}</td>
+                          <td className="px-3 py-2 text-gray-600">{r.plateNo}</td>
+                          <td className="px-3 py-2 text-gray-600">{r.receiptDate}</td>
+                          <td className="px-3 py-2 text-gray-600">{r.receiver}</td>
+                          <td className="px-3 py-2 text-center">
+                            <Badge
+                              className={
+                                r.status === 'confirmed'
+                                  ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
+                                  : 'bg-amber-50 text-amber-600 border-amber-200'
+                              }
+                              size="sm"
+                            >
+                              {r.status === 'confirmed' ? '已签收' : '待签收'}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {activeDetailTab === 'rawFuel' && selectedRecord.fuelCardRecords && selectedRecord.fuelCardRecords.length > 0 && (
+                <div className="border border-gray-200 rounded-lg overflow-hidden max-h-[60vh]">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-gray-50 z-10">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">卡号</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">车牌号</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">充值日期</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">充值金额</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">余额</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {selectedRecord.fuelCardRecords.map((f) => (
+                        <tr key={f.id} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 font-medium text-gray-900">{f.cardNo}</td>
+                          <td className="px-3 py-2 text-gray-600">{f.plateNo}</td>
+                          <td className="px-3 py-2 text-gray-600">{f.rechargeDate}</td>
+                          <td className="px-3 py-2 text-right text-gray-900">¥{formatAmount(f.amount)}</td>
+                          <td className="px-3 py-2 text-right text-blue-600">¥{formatAmount(f.balance)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {activeDetailTab === 'rawToll' && selectedRecord.tollFees && selectedRecord.tollFees.length > 0 && (
+                <div className="border border-gray-200 rounded-lg overflow-hidden max-h-[60vh]">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-gray-50 z-10">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">运单号</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">车牌号</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">日期</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">金额</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">收费站</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {selectedRecord.tollFees.map((t) => (
+                        <tr key={t.id} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 font-medium text-gray-900">{t.waybillNo}</td>
+                          <td className="px-3 py-2 text-gray-600">{t.plateNo}</td>
+                          <td className="px-3 py-2 text-gray-600">{t.tollDate}</td>
+                          <td className="px-3 py-2 text-right text-gray-900">¥{formatAmount(t.amount)}</td>
+                          <td className="px-3 py-2 text-gray-600">{t.station}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {activeDetailTab === 'rawQuotation' && selectedRecord.quotations && selectedRecord.quotations.length > 0 && (
+                <div className="border border-gray-200 rounded-lg overflow-hidden max-h-[60vh]">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-gray-50 z-10">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">承运商</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">线路</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">车型</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">最小重量</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">最大重量</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">单价</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">里程价</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">生效日期</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {selectedRecord.quotations.map((q) => (
+                        <tr key={q.id} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 font-medium text-gray-900">{q.carrier}</td>
+                          <td className="px-3 py-2 text-gray-600">{q.line}</td>
+                          <td className="px-3 py-2 text-gray-600">{q.vehicleType}</td>
+                          <td className="px-3 py-2 text-right text-gray-600">{q.weightMin}</td>
+                          <td className="px-3 py-2 text-right text-gray-600">{q.weightMax}</td>
+                          <td className="px-3 py-2 text-right text-gray-900">¥{formatAmount(q.unitPrice)}</td>
+                          <td className="px-3 py-2 text-right text-gray-900">¥{formatAmount(q.mileagePrice)}</td>
+                          <td className="px-3 py-2 text-gray-600">{q.effectiveDate}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
 
             <div className="p-6 border-t border-gray-100 flex items-center justify-between flex-shrink-0">
@@ -616,28 +1090,216 @@ export const ExportArchive = () => {
                 )}
                 <Button
                   icon={Download}
-                  onClick={() => {
-                    const filename = `对账报表_${selectedRecord.checkBatchNo}`;
-                    const recSummary = {
-                      totalWaybills: selectedRecord.totalWaybills,
-                      matchedCount: selectedRecord.matchedCount,
-                      diffCount: selectedRecord.diffCount,
-                      affectedWaybillCount: selectedRecord.affectedWaybillCount || 0,
-                      diffByType: {} as any,
-                      totalAmount: selectedRecord.totalAmount,
-                      diffAmount: selectedRecord.diffAmount,
-                      payableAmount: selectedRecord.payableAmount,
-                    };
-                    const recCarrierSummaries = selectedRecord.carrierSummaries || [];
-                    const recWaybillSummaries = selectedRecord.waybillSummaries || [];
-                    const recDiffs = selectedRecord.diffs || [];
-                    const recWaybills = selectedRecord.waybills || [];
-                    exportReconciliation(recWaybills, recDiffs, recSummary, recCarrierSummaries, filename, recWaybillSummaries);
-                  }}
+                  onClick={() => handleExportRecord(selectedRecord)}
                 >
                   导出报表
                 </Button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCompareDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] overflow-hidden shadow-2xl flex flex-col">
+            <div className="p-6 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">历史批次对比</h3>
+                <p className="text-sm text-gray-500 mt-1">选择两个批次，按维度查看单量、差异金额、应付金额的波动</p>
+              </div>
+              <button
+                onClick={() => setShowCompareDialog(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
+
+            <div className="p-6 flex-shrink-0 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm text-gray-500 mb-1 block">批次 A（基准）</label>
+                  <select
+                    value={compareBatchA}
+                    onChange={(e) => setCompareBatchA(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
+                  >
+                    <option value="">请选择批次</option>
+                    {checkRecords.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.checkBatchNo} · {r.checkDate} · {CHECK_RECORD_STATUS_LABELS[r.status]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm text-gray-500 mb-1 block">批次 B（对比）</label>
+                  <select
+                    value={compareBatchB}
+                    onChange={(e) => setCompareBatchB(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
+                  >
+                    <option value="">请选择批次</option>
+                    {checkRecords.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.checkBatchNo} · {r.checkDate} · {CHECK_RECORD_STATUS_LABELS[r.status]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {(['carrier', 'line', 'diffType'] as CompareDim[]).map((dim) => (
+                  <button
+                    key={dim}
+                    onClick={() => setCompareDim(dim)}
+                    className={`px-4 py-2 text-sm rounded-lg font-medium transition-colors ${
+                      compareDim === dim
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {dim === 'carrier' && '按承运商'}
+                    {dim === 'line' && '按线路'}
+                    {dim === 'diffType' && '按差异类型'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="px-6 pb-6 overflow-y-auto flex-1">
+              {!compareBatchA || !compareBatchB ? (
+                <div className="text-center py-16 bg-gray-50 rounded-lg">
+                  <GitCompareArrows className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                  <p className="text-gray-500">请先选择两个批次进行对比</p>
+                </div>
+              ) : compareResult && compareResult.type === 'carrier' ? (
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th rowSpan={2} className="px-3 py-2 text-left text-xs font-medium text-gray-500 border-r border-gray-200">承运商</th>
+                        <th colSpan={2} className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200">单量</th>
+                        <th colSpan={3} className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-r border-l border-gray-200">差异金额</th>
+                        <th colSpan={3} className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200">应付金额</th>
+                      </tr>
+                      <tr className="bg-gray-50">
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 border-r border-gray-200">B</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">B</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 border-r border-gray-200">Δ%</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">B</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Δ%</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {compareResult.rows.map((row) => {
+                        const dpDiff = deltaPct(row.diffAmountA, row.diffAmountB);
+                        const dpPay = deltaPct(row.payableAmountA, row.payableAmountB);
+                        return (
+                          <tr key={row.key} className="hover:bg-gray-50">
+                            <td className="px-3 py-2 font-medium text-gray-900 border-r border-gray-100">{row.label}</td>
+                            <td className="px-3 py-2 text-right text-gray-600">{row.waybillCountA}</td>
+                            <td className="px-3 py-2 text-right text-gray-600 border-r border-gray-100">{row.waybillCountB}</td>
+                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.diffAmountA)}</td>
+                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.diffAmountB)}</td>
+                            <td className={`px-3 py-2 text-right font-medium border-r border-gray-100 ${dpDiff > 0 ? 'text-red-600' : dpDiff < 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
+                              {dpDiff > 0 ? '+' : ''}{dpDiff}%
+                            </td>
+                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.payableAmountA)}</td>
+                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.payableAmountB)}</td>
+                            <td className={`px-3 py-2 text-right font-medium ${dpPay > 0 ? 'text-red-600' : dpPay < 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
+                              {dpPay > 0 ? '+' : ''}{dpPay}%
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : compareResult && compareResult.type === 'line' ? (
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th rowSpan={2} className="px-3 py-2 text-left text-xs font-medium text-gray-500 border-r border-gray-200">线路</th>
+                        <th colSpan={2} className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200">单量</th>
+                        <th colSpan={3} className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200">应付金额</th>
+                      </tr>
+                      <tr className="bg-gray-50">
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 border-r border-gray-200">B</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">B</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Δ%</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {compareResult.rows.map((row) => {
+                        const dp = deltaPct(row.payableA, row.payableB);
+                        return (
+                          <tr key={row.key} className="hover:bg-gray-50">
+                            <td className="px-3 py-2 font-medium text-gray-900 border-r border-gray-100">{row.label}</td>
+                            <td className="px-3 py-2 text-right text-gray-600">{row.waybillCountA}</td>
+                            <td className="px-3 py-2 text-right text-gray-600 border-r border-gray-100">{row.waybillCountB}</td>
+                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.payableA)}</td>
+                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.payableB)}</td>
+                            <td className={`px-3 py-2 text-right font-medium ${dp > 0 ? 'text-red-600' : dp < 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
+                              {dp > 0 ? '+' : ''}{dp}%
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : compareResult && compareResult.type === 'diffType' ? (
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th rowSpan={2} className="px-3 py-2 text-left text-xs font-medium text-gray-500 border-r border-gray-200">差异类型</th>
+                        <th colSpan={2} className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200">数量</th>
+                        <th colSpan={3} className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200">差异金额</th>
+                      </tr>
+                      <tr className="bg-gray-50">
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 border-r border-gray-200">B</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">B</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Δ%</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {compareResult.rows.map((row) => {
+                        const dp = deltaPct(row.diffAmountA, row.diffAmountB);
+                        return (
+                          <tr key={row.key} className="hover:bg-gray-50">
+                            <td className="px-3 py-2 font-medium text-gray-900 border-r border-gray-100">{row.label}</td>
+                            <td className="px-3 py-2 text-right text-gray-600">{row.countA}</td>
+                            <td className="px-3 py-2 text-right text-gray-600 border-r border-gray-100">{row.countB}</td>
+                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.diffAmountA)}</td>
+                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.diffAmountB)}</td>
+                            <td className={`px-3 py-2 text-right font-medium ${dp > 0 ? 'text-red-600' : dp < 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
+                              {dp > 0 ? '+' : ''}{dp}%
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3 flex-shrink-0">
+              <Button variant="outline" onClick={() => setShowCompareDialog(false)}>
+                关闭
+              </Button>
             </div>
           </div>
         </div>
