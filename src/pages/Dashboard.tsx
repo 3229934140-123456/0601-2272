@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { useEffect } from 'react';
 import {
   FileText,
   AlertTriangle,
@@ -18,7 +19,12 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 
 export const Dashboard = () => {
   const navigate = useNavigate();
-  const { waybills, checkRecords, getCheckSummary, diffRecords } = useAppStore();
+  const { waybills, checkRecords, getCheckSummary, diffRecords, loadHistoryFromDB } = useAppStore();
+
+  useEffect(() => {
+    loadHistoryFromDB();
+  }, []);
+
   const summary = getCheckSummary();
 
   const recentChecks = checkRecords.slice(0, 5);

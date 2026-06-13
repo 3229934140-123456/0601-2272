@@ -16,7 +16,6 @@ import { Badge } from '@/components/Badge';
 import { useAppStore } from '@/store/useAppStore';
 import { formatFileSize, parseExcelFile } from '@/utils/fileParser';
 import { FILE_TYPE_LABELS, FileType } from '@/types';
-import { mockData } from '@/data/mockData';
 
 const steps = ['文件导入', '规则设置', '差异核对', '结果复核', '导出归档'];
 
@@ -124,7 +123,37 @@ export const FileImport = () => {
     }, 200);
 
     try {
-      const data = await parseFileByType(file, type);
+      const data = await parseExcelFile(file, type);
+
+      if (!data || data.length === 0) {
+        clearInterval(progressInterval);
+        updateImportFile(fileId, {
+          status: 'error',
+          progress: 0,
+          errorMessage: '文件内容为空或表头不匹配，请检查文件格式',
+        });
+        return;
+      }
+
+      const requiredFields = getRequiredFields(type);
+      const firstRow = data[0] as Record<string, unknown>;
+      const missingFields = requiredFields.filter(
+        (field) => firstRow[field] === undefined || firstRow[field] === null || firstRow[field] === ''
+      );
+
+      if (missingFields.length > 0 && type === 'waybill') {
+        const waybillRow = firstRow as any;
+        if (!waybillRow.waybillNo) {
+          clearInterval(progressInterval);
+          updateImportFile(fileId, {
+            status: 'error',
+            progress: 0,
+            errorMessage: '缺少必填字段"运单号"，请检查表头是否正确',
+          });
+          return;
+        }
+      }
+
       clearInterval(progressInterval);
       updateImportFile(fileId, { status: 'success', progress: 100, rows: data.length });
 
@@ -147,34 +176,27 @@ export const FileImport = () => {
       }
     } catch (error) {
       clearInterval(progressInterval);
+      const msg = error instanceof Error ? error.message : '文件解析失败';
       updateImportFile(fileId, {
         status: 'error',
         progress: 0,
-        errorMessage: '文件解析失败，请检查文件格式',
+        errorMessage: msg.includes('format') ? '文件格式不支持，请上传Excel或CSV文件' : '文件解析失败，请检查文件是否损坏或表头是否正确',
       });
     }
   };
 
-  const parseFileByType = async (file: File, type: FileType) => {
-    try {
-      return await parseExcelFile(file, type);
-    } catch {
-      return generateMockDataByType(type);
-    }
-  };
-
-  const generateMockDataByType = (type: FileType) => {
+  const getRequiredFields = (type: FileType): string[] => {
     switch (type) {
       case 'waybill':
-        return mockData.waybills;
+        return ['waybillNo'];
       case 'receipt':
-        return mockData.receipts;
+        return ['waybillNo'];
       case 'fuelCard':
-        return mockData.fuelCardRecords;
+        return ['cardNo'];
       case 'tollFee':
-        return mockData.tollFees;
+        return ['waybillNo'];
       case 'quotation':
-        return mockData.quotations;
+        return ['carrier', 'line'];
       default:
         return [];
     }
@@ -184,9 +206,7 @@ export const FileImport = () => {
     return importFiles.filter((f) => f.type === type);
   };
 
-  const allTypesImported = (['waybill', 'receipt', 'fuelCard', 'tollFee', 'quotation'] as FileType[]).every(
-    (type) => getFilesByType(type).some((f) => f.status === 'success')
-  );
+  const allTypesImported = useAppStore((s) => s.waybills.length > 0);
 
   const handleNext = () => {
     setCurrentStep(1);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Download,
   Archive,
@@ -20,15 +20,19 @@ import { Badge } from '@/components/Badge';
 import { useAppStore } from '@/store/useAppStore';
 import { exportReconciliation, exportDiffRecords } from '@/utils/exporter';
 import { formatAmount } from '@/utils/fileParser';
-import { CheckRecord } from '@/types';
+import { CheckRecord, DIFF_TYPE_LABELS, DIFF_TYPE_COLORS, DIFF_STATUS_LABELS, DIFF_STATUS_COLORS } from '@/types';
 
 const steps = ['文件导入', '规则设置', '差异核对', '结果复核', '导出归档'];
 
 export const ExportArchive = () => {
-  const { waybills, diffRecords, checkRecords, getCheckSummary, getCarrierSummaries, loadCheckRecord } = useAppStore();
+  const { waybills, diffRecords, checkRecords, getCheckSummary, getCarrierSummaries, loadCheckRecord, loadHistoryFromDB } = useAppStore();
   const [searchKeyword, setSearchKeyword] = useState('');
   const [selectedRecord, setSelectedRecord] = useState<CheckRecord | null>(null);
   const [showDetail, setShowDetail] = useState(false);
+
+  useEffect(() => {
+    loadHistoryFromDB();
+  }, []);
 
   const summary = getCheckSummary();
   const carrierSummaries = getCarrierSummaries();
@@ -271,7 +275,7 @@ export const ExportArchive = () => {
 
       {showDetail && selectedRecord && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl w-full max-w-2xl max-h-[80vh] overflow-hidden shadow-2xl">
+          <div className="bg-white rounded-xl w-full max-w-3xl max-h-[85vh] overflow-hidden shadow-2xl">
             <div className="p-6 border-b border-gray-100 flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-semibold text-gray-900">{selectedRecord.checkBatchNo}</h3>
@@ -287,7 +291,7 @@ export const ExportArchive = () => {
               </button>
             </div>
 
-            <div className="p-6 overflow-y-auto max-h-[60vh]">
+            <div className="p-6 overflow-y-auto max-h-[65vh]">
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div className="bg-gray-50 rounded-lg p-4">
                   <p className="text-sm text-gray-500">核对日期</p>
@@ -311,7 +315,7 @@ export const ExportArchive = () => {
                 </div>
               </div>
 
-              <div className="space-y-4">
+              <div className="space-y-4 mb-6">
                 <h4 className="font-medium text-gray-900">金额统计</h4>
                 <div className="space-y-3">
                   <div className="flex items-center justify-between py-2 border-b border-gray-100">
@@ -339,8 +343,74 @@ export const ExportArchive = () => {
                 </div>
               </div>
 
+              {selectedRecord.diffs && selectedRecord.diffs.length > 0 && (
+                <div className="mb-6">
+                  <h4 className="font-medium text-gray-900 mb-3">差异明细（{selectedRecord.diffs.length} 条）</h4>
+                  <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-50">
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">运单号</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">问题类型</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">差异金额</th>
+                          <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">状态</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">备注</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {selectedRecord.diffs.map((d) => (
+                          <tr key={d.id} className="hover:bg-gray-50">
+                            <td className="px-3 py-2 font-medium text-gray-900">{d.waybillNo}</td>
+                            <td className="px-3 py-2">
+                              <Badge className={DIFF_TYPE_COLORS[d.diffType]} size="sm">
+                                {DIFF_TYPE_LABELS[d.diffType]}
+                              </Badge>
+                            </td>
+                            <td className="px-3 py-2 text-right text-red-600 font-medium">¥{formatAmount(d.diffAmount)}</td>
+                            <td className="px-3 py-2 text-center">
+                              <Badge className={DIFF_STATUS_COLORS[d.status]} size="sm">
+                                {DIFF_STATUS_LABELS[d.status]}
+                              </Badge>
+                            </td>
+                            <td className="px-3 py-2 text-gray-500 max-w-[200px] truncate">{d.remark || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {selectedRecord.carrierSummaries && selectedRecord.carrierSummaries.length > 0 && (
+                <div className="mb-6">
+                  <h4 className="font-medium text-gray-900 mb-3">按承运商汇总</h4>
+                  <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-50">
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">承运商</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">运单数</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">总金额</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">应付金额</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {selectedRecord.carrierSummaries.map((cs) => (
+                          <tr key={cs.carrier} className="hover:bg-gray-50">
+                            <td className="px-3 py-2 font-medium text-gray-900">{cs.carrier}</td>
+                            <td className="px-3 py-2 text-right text-gray-600">{cs.waybillCount}</td>
+                            <td className="px-3 py-2 text-right text-gray-900">¥{formatAmount(cs.totalAmount)}</td>
+                            <td className="px-3 py-2 text-right text-blue-600 font-medium">¥{formatAmount(cs.payableAmount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
               {selectedRecord.remark && (
-                <div className="mt-6 pt-6 border-t border-gray-100">
+                <div className="pt-4 border-t border-gray-100">
                   <h4 className="font-medium text-gray-900 mb-2">备注</h4>
                   <p className="text-sm text-gray-600 bg-gray-50 p-3 rounded-lg">
                     {selectedRecord.remark}
@@ -357,7 +427,18 @@ export const ExportArchive = () => {
                 icon={Download}
                 onClick={() => {
                   const filename = `对账报表_${selectedRecord.checkBatchNo}`;
-                  exportReconciliation(waybills, diffRecords, summary, carrierSummaries, filename);
+                  const recSummary = {
+                    totalWaybills: selectedRecord.totalWaybills,
+                    matchedCount: selectedRecord.matchedCount,
+                    diffCount: selectedRecord.diffCount,
+                    diffByType: {} as any,
+                    totalAmount: selectedRecord.totalAmount,
+                    diffAmount: selectedRecord.diffAmount,
+                    payableAmount: selectedRecord.payableAmount,
+                  };
+                  const recCarrierSummaries = selectedRecord.carrierSummaries || [];
+                  const recDiffs = selectedRecord.diffs || [];
+                  exportReconciliation([], recDiffs, recSummary, recCarrierSummaries, filename);
                 }}
               >
                 导出报表

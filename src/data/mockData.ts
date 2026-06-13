@@ -80,11 +80,11 @@ const billingRules: BillingRule[] = [
 const diffTypes: DiffType[] = ['missing_receipt', 'duplicate_waybill', 'exceed_quotation', 'fee_unallocated', 'mileage_mismatch', 'weight_mismatch', 'other'];
 
 const checkRecords: CheckRecord[] = [
-  { id: generateId(), checkBatchNo: 'CHECK20240615001', checkDate: '2024-06-15', totalWaybills: 50, matchedCount: 42, diffCount: 8, status: 'completed', operator: '张会计', totalAmount: 125000, diffAmount: 8500, payableAmount: 116500 },
-  { id: generateId(), checkBatchNo: 'CHECK20240610002', checkDate: '2024-06-10', totalWaybills: 35, matchedCount: 30, diffCount: 5, status: 'completed', operator: '李出纳', totalAmount: 89000, diffAmount: 5200, payableAmount: 83800 },
-  { id: generateId(), checkBatchNo: 'CHECK20240605003', checkDate: '2024-06-05', totalWaybills: 42, matchedCount: 38, diffCount: 4, status: 'reviewing', operator: '张会计', totalAmount: 102000, diffAmount: 3800, payableAmount: 98200 },
-  { id: generateId(), checkBatchNo: 'CHECK20240528004', checkDate: '2024-05-28', totalWaybills: 28, matchedCount: 26, diffCount: 2, status: 'completed', operator: '王主管', totalAmount: 72000, diffAmount: 1500, payableAmount: 70500 },
-  { id: generateId(), checkBatchNo: 'CHECK20240520005', checkDate: '2024-05-20', totalWaybills: 60, matchedCount: 55, diffCount: 5, status: 'completed', operator: '李出纳', totalAmount: 156000, diffAmount: 6800, payableAmount: 149200 },
+  { id: generateId(), checkBatchNo: 'CHECK20240615001', checkDate: '2024-06-15', totalWaybills: 50, matchedCount: 42, diffCount: 8, status: 'completed', operator: '张会计', totalAmount: 125000, diffAmount: 8500, payableAmount: 116500, diffs: [], carrierSummaries: [] },
+  { id: generateId(), checkBatchNo: 'CHECK20240610002', checkDate: '2024-06-10', totalWaybills: 35, matchedCount: 30, diffCount: 5, status: 'completed', operator: '李出纳', totalAmount: 89000, diffAmount: 5200, payableAmount: 83800, diffs: [], carrierSummaries: [] },
+  { id: generateId(), checkBatchNo: 'CHECK20240605003', checkDate: '2024-06-05', totalWaybills: 42, matchedCount: 38, diffCount: 4, status: 'reviewing', operator: '张会计', totalAmount: 102000, diffAmount: 3800, payableAmount: 98200, diffs: [], carrierSummaries: [] },
+  { id: generateId(), checkBatchNo: 'CHECK20240528004', checkDate: '2024-05-28', totalWaybills: 28, matchedCount: 26, diffCount: 2, status: 'completed', operator: '王主管', totalAmount: 72000, diffAmount: 1500, payableAmount: 70500, diffs: [], carrierSummaries: [] },
+  { id: generateId(), checkBatchNo: 'CHECK20240520005', checkDate: '2024-05-20', totalWaybills: 60, matchedCount: 55, diffCount: 5, status: 'completed', operator: '李出纳', totalAmount: 156000, diffAmount: 6800, payableAmount: 149200, diffs: [], carrierSummaries: [] },
 ];
 
 const generateDiffRecords = (checkId: string, waybills: Waybill[]): DiffRecord[] => {

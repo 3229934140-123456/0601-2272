@@ -38,6 +38,7 @@ export const DiffCheck = () => {
   const [hasChecked, setHasChecked] = useState(false);
 
   const {
+    waybills,
     diffRecords,
     runCheck,
     getCheckSummary,
@@ -121,8 +122,8 @@ export const DiffCheck = () => {
           <p className="text-gray-500 mb-8 max-w-md mx-auto">
             系统将根据配置的规则，自动匹配运单、回单、油卡、过路费等数据，识别各类差异问题
           </p>
-          <Button size="lg" icon={Play} onClick={handleRunCheck} loading={isChecking}>
-            {isChecking ? '正在核对...' : '开始核对'}
+          <Button size="lg" icon={Play} onClick={handleRunCheck} loading={isChecking} disabled={waybills.length === 0}>
+            {isChecking ? '正在核对...' : waybills.length === 0 ? '请先导入运单数据' : '开始核对'}
           </Button>
 
           <div className="mt-10 grid grid-cols-4 gap-4 max-w-2xl mx-auto">

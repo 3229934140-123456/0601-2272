@@ -120,6 +120,8 @@ export interface CheckRecord {
   totalAmount: number;
   diffAmount: number;
   payableAmount: number;
+  diffs: DiffRecord[];
+  carrierSummaries: CarrierSummary[];
 }
 
 export interface CheckSummary {

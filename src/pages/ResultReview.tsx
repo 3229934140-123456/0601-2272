@@ -74,7 +74,7 @@ export const ResultReview = () => {
 
   const handleAdjust = (id: string) => {
     if (adjustedAmount === null) return;
-    setDiffStatus(id, 'adjusted', remarkInput);
+    setDiffStatus(id, 'adjusted', remarkInput, adjustedAmount);
     if (selectedDiff?.id === id) {
       setSelectedDiff({
         ...selectedDiff,
