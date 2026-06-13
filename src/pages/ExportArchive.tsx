@@ -19,6 +19,14 @@ import {
   GitCompareArrows,
   Filter,
   X,
+  BookmarkPlus,
+  Bookmark,
+  Trash2,
+  ChevronDown,
+  Award,
+  BarChart3,
+  AlertOctagon,
+  Route,
 } from 'lucide-react';
 import { StepIndicator } from '@/components/StepIndicator';
 import { Button } from '@/components/Button';
@@ -37,6 +45,7 @@ import {
   CHECK_RECORD_STATUS_COLORS,
   WaybillSummary,
   CarrierSummary,
+  FilterScheme,
 } from '@/types';
 
 const steps = ['文件导入', '规则设置', '差异核对', '结果复核', '导出归档'];
@@ -63,7 +72,7 @@ const resolveWaybillFinalStatus = (statuses: string[]): string => {
   return '正常';
 };
 
-interface CarrierCompareRow {
+interface UnifiedCompareRow {
   key: string;
   label: string;
   waybillCountA: number;
@@ -74,14 +83,49 @@ interface CarrierCompareRow {
   payableAmountB: number;
 }
 
-interface DiffTypeCompareRow {
-  key: string;
-  label: string;
-  countA: number;
-  countB: number;
-  diffAmountA: number;
-  diffAmountB: number;
+interface ReviewInsight {
+  topCarrier: { carrier: string; diffAmount: number } | null;
+  topLine: { line: string; payableAmount: number; waybillCount: number } | null;
+  topDiffType: { diffType: string; count: number; diffAmount: number } | null;
+  carrierRank: { carrier: string; diffAmount: number }[];
 }
+
+const buildReviewInsight = (record: CheckRecord): ReviewInsight => {
+  const carrierRank = [...(record.carrierSummaries || [])]
+    .sort((a, b) => b.diffAmount - a.diffAmount)
+    .map((cs) => ({ carrier: cs.carrier, diffAmount: cs.diffAmount }));
+  const topCarrier = carrierRank[0]?.diffAmount > 0 ? carrierRank[0] : null;
+
+  const wbMap = new Map<string, WaybillSummary>();
+  (record.waybillSummaries || []).forEach((ws) => wbMap.set(ws.waybillNo, ws));
+  const lineMap = new Map<string, { line: string; payableAmount: number; waybillCount: number }>();
+  (record.waybills || []).forEach((w) => {
+    const key = w.line || '未填线路';
+    const ws = wbMap.get(w.waybillNo);
+    const prev = lineMap.get(key) || { line: key, payableAmount: 0, waybillCount: 0 };
+    lineMap.set(key, {
+      line: key,
+      payableAmount: prev.payableAmount + (ws?.payableAmount ?? w.freight),
+      waybillCount: prev.waybillCount + 1,
+    });
+  });
+  const lineRank = Array.from(lineMap.values()).sort((a, b) => b.payableAmount - a.payableAmount);
+  const topLine = lineRank[0] || null;
+
+  const diffTypeMap = new Map<string, { diffType: string; count: number; diffAmount: number }>();
+  (record.diffs || []).forEach((d) => {
+    const prev = diffTypeMap.get(d.diffType) || { diffType: d.diffType, count: 0, diffAmount: 0 };
+    diffTypeMap.set(d.diffType, {
+      diffType: d.diffType,
+      count: prev.count + 1,
+      diffAmount: prev.diffAmount + d.diffAmount,
+    });
+  });
+  const diffTypeRank = Array.from(diffTypeMap.values()).sort((a, b) => b.count - a.count);
+  const topDiffType = diffTypeRank[0] || null;
+
+  return { topCarrier, topLine, topDiffType, carrierRank };
+};
 
 export const ExportArchive = () => {
   const {
@@ -94,6 +138,10 @@ export const ExportArchive = () => {
     loadCheckRecord,
     loadHistoryFromDB,
     markRecordArchived,
+    filterSchemes,
+    saveFilterScheme,
+    loadFilterSchemes,
+    deleteFilterScheme,
   } = useAppStore();
 
   const [searchKeyword, setSearchKeyword] = useState('');
@@ -113,8 +161,13 @@ export const ExportArchive = () => {
   const [compareBatchB, setCompareBatchB] = useState<string>('');
   const [compareDim, setCompareDim] = useState<CompareDim>('carrier');
 
+  const [showSchemeDialog, setShowSchemeDialog] = useState(false);
+  const [schemeName, setSchemeName] = useState('');
+  const [showSchemeMenu, setShowSchemeMenu] = useState(false);
+
   useEffect(() => {
     loadHistoryFromDB();
+    loadFilterSchemes();
   }, []);
 
   const summary = getCheckSummary();
@@ -160,21 +213,112 @@ export const ExportArchive = () => {
     setFilterEndDate('');
   };
 
+  const applyScheme = (s: FilterScheme) => {
+    setSearchKeyword(s.keyword);
+    setFilterStatus(s.status);
+    setFilterCarrier(s.carrier);
+    setFilterStartDate(s.startDate);
+    setFilterEndDate(s.endDate);
+    setShowSchemeMenu(false);
+  };
+
+  const handleSaveScheme = async () => {
+    if (!schemeName.trim()) return;
+    await saveFilterScheme(schemeName.trim(), {
+      keyword: searchKeyword,
+      status: filterStatus,
+      carrier: filterCarrier,
+      startDate: filterStartDate,
+      endDate: filterEndDate,
+    });
+    setSchemeName('');
+    setShowSchemeDialog(false);
+  };
+
   const handleExportAll = () => {
     const filename = `对账报表_${new Date().toISOString().slice(0, 10)}`;
     const ws = getWaybillSummaries();
     const cs = getCarrierSummaries();
     const s = getCheckSummary();
-    const receipts = useAppStore.getState().receipts;
-    const fuelCardRecords = useAppStore.getState().fuelCardRecords;
-    const tollFees = useAppStore.getState().tollFees;
-    const quotations = useAppStore.getState().quotations;
-    exportReconciliation(waybills, diffRecords, s, cs, filename, ws, receipts, fuelCardRecords, tollFees, quotations);
+    const st = useAppStore.getState();
+    exportReconciliation(
+      waybills,
+      diffRecords,
+      s,
+      cs,
+      filename,
+      ws,
+      st.receipts,
+      st.fuelCardRecords,
+      st.tollFees,
+      st.quotations
+    );
   };
 
   const handleExportDiffs = () => {
     const filename = `差异明细_${new Date().toISOString().slice(0, 10)}`;
     exportDiffRecords(diffRecords, filename);
+  };
+
+  const handleExportFiltered = () => {
+    if (filteredRecords.length === 0) return;
+    const mergedDiffs = filteredRecords.flatMap((r) => r.diffs || []);
+    const mergedWaybills = filteredRecords.flatMap((r) => r.waybills || []);
+    const mergedWaybillSummaries = filteredRecords.flatMap((r) => r.waybillSummaries || []);
+    const mergedCarrierMap = new Map<string, CarrierSummary>();
+    let totalWb = 0,
+      totalDiff = 0,
+      totalAmt = 0,
+      totalPay = 0,
+      totalAffected = 0,
+      totalMatched = 0;
+    filteredRecords.forEach((r) => {
+      totalWb += r.totalWaybills;
+      totalDiff += r.diffCount;
+      totalAmt += r.totalAmount;
+      totalPay += r.payableAmount;
+      totalAffected += r.affectedWaybillCount || 0;
+      (r.carrierSummaries || []).forEach((cs) => {
+        const prev = mergedCarrierMap.get(cs.carrier) || {
+          carrier: cs.carrier,
+          waybillCount: 0,
+          totalAmount: 0,
+          diffCount: 0,
+          affectedWaybillCount: 0,
+          diffAmount: 0,
+          payableAmount: 0,
+        };
+        mergedCarrierMap.set(cs.carrier, {
+          carrier: cs.carrier,
+          waybillCount: prev.waybillCount + cs.waybillCount,
+          totalAmount: prev.totalAmount + cs.totalAmount,
+          diffCount: prev.diffCount + cs.diffCount,
+          affectedWaybillCount: prev.affectedWaybillCount + (cs.affectedWaybillCount || 0),
+          diffAmount: prev.diffAmount + cs.diffAmount,
+          payableAmount: prev.payableAmount + cs.payableAmount,
+        });
+      });
+    });
+    totalMatched = Math.max(0, totalWb - totalAffected);
+    const mergedSummary = {
+      totalWaybills: totalWb,
+      matchedCount: totalMatched,
+      diffCount: totalDiff,
+      affectedWaybillCount: totalAffected,
+      diffByType: {} as any,
+      totalAmount: totalAmt,
+      diffAmount: filteredRecords.reduce((s, r) => s + r.diffAmount, 0),
+      payableAmount: totalPay,
+    };
+    const filename = `筛选结果_${new Date().toISOString().slice(0, 10)}_${filteredRecords.length}批次`;
+    exportReconciliation(
+      mergedWaybills,
+      mergedDiffs,
+      mergedSummary,
+      Array.from(mergedCarrierMap.values()),
+      filename,
+      mergedWaybillSummaries
+    );
   };
 
   const handleViewRecord = (record: CheckRecord) => {
@@ -228,27 +372,27 @@ export const ExportArchive = () => {
     setArchiveRemark('');
   };
 
-  const compareResult = useMemo(() => {
+  const compareResult = useMemo((): { type: CompareDim; rows: UnifiedCompareRow[] } | null => {
     const recA = checkRecords.find((r) => r.id === compareBatchA);
     const recB = checkRecords.find((r) => r.id === compareBatchB);
     if (!recA || !recB) return null;
 
+    const buildEmpty = (key: string, label: string): UnifiedCompareRow => ({
+      key,
+      label,
+      waybillCountA: 0,
+      waybillCountB: 0,
+      diffAmountA: 0,
+      diffAmountB: 0,
+      payableAmountA: 0,
+      payableAmountB: 0,
+    });
+
     if (compareDim === 'carrier') {
-      const carrierMap = new Map<string, CarrierCompareRow>();
-      const buildRow = (r: CheckRecord, side: 'A' | 'B') => {
+      const carrierMap = new Map<string, UnifiedCompareRow>();
+      const build = (r: CheckRecord, side: 'A' | 'B') => {
         (r.carrierSummaries || []).forEach((cs: CarrierSummary) => {
-          if (!carrierMap.has(cs.carrier)) {
-            carrierMap.set(cs.carrier, {
-              key: cs.carrier,
-              label: cs.carrier,
-              waybillCountA: 0,
-              waybillCountB: 0,
-              diffAmountA: 0,
-              diffAmountB: 0,
-              payableAmountA: 0,
-              payableAmountB: 0,
-            });
-          }
+          if (!carrierMap.has(cs.carrier)) carrierMap.set(cs.carrier, buildEmpty(cs.carrier, cs.carrier));
           const row = carrierMap.get(cs.carrier)!;
           if (side === 'A') {
             row.waybillCountA = cs.waybillCount;
@@ -261,67 +405,93 @@ export const ExportArchive = () => {
           }
         });
       };
-      buildRow(recA, 'A');
-      buildRow(recB, 'B');
-      return { type: 'carrier' as const, rows: Array.from(carrierMap.values()) };
+      build(recA, 'A');
+      build(recB, 'B');
+      return { type: 'carrier', rows: Array.from(carrierMap.values()) };
     }
 
     if (compareDim === 'line') {
-      const lineMap = new Map<
-        string,
-        { key: string; label: string; waybillCountA: number; waybillCountB: number; payableA: number; payableB: number }
-      >();
+      const lineMap = new Map<string, UnifiedCompareRow>();
       const build = (r: CheckRecord, side: 'A' | 'B') => {
         const wbMap = new Map<string, WaybillSummary>();
+        const diffByLine = new Map<string, { diffAmount: number; waybillCount: number }>();
         (r.waybillSummaries || []).forEach((ws) => wbMap.set(ws.waybillNo, ws));
+        (r.diffs || []).forEach((d) => {
+          const wb = (r.waybills || []).find((w) => w.waybillNo === d.waybillNo);
+          const key = wb?.line || '未填线路';
+          const prev = diffByLine.get(key) || { diffAmount: 0, waybillCount: 0 };
+          diffByLine.set(key, { diffAmount: prev.diffAmount + d.diffAmount, waybillCount: prev.waybillCount });
+        });
+        const waybillLineSet = new Map<string, number>();
         (r.waybills || []).forEach((w) => {
           const key = w.line || '未填线路';
-          if (!lineMap.has(key)) {
-            lineMap.set(key, { key, label: key, waybillCountA: 0, waybillCountB: 0, payableA: 0, payableB: 0 });
-          }
+          waybillLineSet.set(key, (waybillLineSet.get(key) || 0) + 1);
+        });
+        waybillLineSet.forEach((wbCount, key) => {
+          if (!lineMap.has(key)) lineMap.set(key, buildEmpty(key, key));
           const row = lineMap.get(key)!;
-          const ws = wbMap.get(w.waybillNo);
+          const ws = (r.waybills || []).filter((w) => (w.line || '未填线路') === key);
+          const payable = ws.reduce(
+            (s, w) => s + (wbMap.get(w.waybillNo)?.payableAmount ?? w.freight),
+            0
+          );
+          const diffInfo = diffByLine.get(key);
           if (side === 'A') {
-            row.waybillCountA += 1;
-            row.payableA += ws?.payableAmount ?? w.freight;
+            row.waybillCountA = wbCount;
+            row.diffAmountA = diffInfo?.diffAmount || 0;
+            row.payableAmountA = payable;
           } else {
-            row.waybillCountB += 1;
-            row.payableB += ws?.payableAmount ?? w.freight;
+            row.waybillCountB = wbCount;
+            row.diffAmountB = diffInfo?.diffAmount || 0;
+            row.payableAmountB = payable;
           }
         });
       };
       build(recA, 'A');
       build(recB, 'B');
-      return { type: 'line' as const, rows: Array.from(lineMap.values()) };
+      return { type: 'line', rows: Array.from(lineMap.values()) };
     }
 
-    const diffMap = new Map<string, DiffTypeCompareRow>();
+    const diffMap = new Map<string, UnifiedCompareRow>();
     const build = (r: CheckRecord, side: 'A' | 'B') => {
+      const wbSetByType = new Map<string, Set<string>>();
+      const diffAmtByType = new Map<string, number>();
       (r.diffs || []).forEach((d) => {
-        const key = d.diffType;
+        if (!wbSetByType.has(d.diffType)) wbSetByType.set(d.diffType, new Set());
+        wbSetByType.get(d.diffType)!.add(d.waybillNo);
+        diffAmtByType.set(d.diffType, (diffAmtByType.get(d.diffType) || 0) + d.diffAmount);
+      });
+      wbSetByType.forEach((wbSet, key) => {
         const label = (DIFF_TYPE_LABELS as any)[key] || key;
-        if (!diffMap.has(key)) {
-          diffMap.set(key, { key, label, countA: 0, countB: 0, diffAmountA: 0, diffAmountB: 0 });
-        }
+        if (!diffMap.has(key)) diffMap.set(key, buildEmpty(key, label));
         const row = diffMap.get(key)!;
+        const diffs = (r.diffs || []).filter((d) => d.diffType === key);
+        const affectedNos = new Set(diffs.map((d) => d.waybillNo));
+        const payable = (r.waybillSummaries || [])
+          .filter((ws) => affectedNos.has(ws.waybillNo))
+          .reduce((s, ws) => s + ws.payableAmount, 0);
         if (side === 'A') {
-          row.countA += 1;
-          row.diffAmountA += d.diffAmount;
+          row.waybillCountA = wbSet.size;
+          row.diffAmountA = diffAmtByType.get(key) || 0;
+          row.payableAmountA = payable;
         } else {
-          row.countB += 1;
-          row.diffAmountB += d.diffAmount;
+          row.waybillCountB = wbSet.size;
+          row.diffAmountB = diffAmtByType.get(key) || 0;
+          row.payableAmountB = payable;
         }
       });
     };
     build(recA, 'A');
     build(recB, 'B');
-    return { type: 'diffType' as const, rows: Array.from(diffMap.values()) };
+    return { type: 'diffType', rows: Array.from(diffMap.values()) };
   }, [compareBatchA, compareBatchB, compareDim, checkRecords]);
 
   const deltaPct = (a: number, b: number) => {
     if (a === 0) return b === 0 ? 0 : 100;
     return Math.round(((b - a) / a) * 1000) / 10;
   };
+
+  const dimLabel = compareDim === 'carrier' ? '承运商' : compareDim === 'line' ? '线路' : '差异类型';
 
   return (
     <div className="p-8">
@@ -343,11 +513,11 @@ export const ExportArchive = () => {
               </div>
               <div>
                 <h3 className="font-semibold">对账总表</h3>
-                <p className="text-blue-100 text-sm">完整对账报表</p>
+                <p className="text-blue-100 text-sm">当前处理批次</p>
               </div>
             </div>
             <p className="text-blue-100 text-sm mb-4">
-              包含原始五类数据、差异明细、按运单汇总、按承运商汇总的完整Excel
+              按当前正在处理的批次数据导出，含原始五类数据、差异明细、两层汇总
             </p>
             <Button
               variant="secondary"
@@ -369,11 +539,11 @@ export const ExportArchive = () => {
               </div>
               <div>
                 <h3 className="font-semibold">差异明细</h3>
-                <p className="text-amber-100 text-sm">仅差异数据</p>
+                <p className="text-amber-100 text-sm">当前处理批次</p>
               </div>
             </div>
             <p className="text-amber-100 text-sm mb-4">
-              导出所有差异记录，包含问题类型、金额、状态等信息
+              按当前正在处理的批次导出所有差异记录，含问题类型、金额、状态
             </p>
             <Button
               variant="secondary"
@@ -446,6 +616,68 @@ export const ExportArchive = () => {
             <div>
               <h2 className="font-semibold text-gray-900">历史核对记录</h2>
               <p className="text-sm text-gray-500 mt-0.5">所有核对记录永久保存，支持追溯查询与归档操作</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <button
+                  onClick={() => setShowSchemeMenu((v) => !v)}
+                  className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50 transition-colors"
+                >
+                  <Bookmark className="w-4 h-4 text-gray-500" />
+                  <span>筛选方案</span>
+                  <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
+                </button>
+                {showSchemeMenu && (
+                  <div className="absolute right-0 mt-2 w-72 bg-white rounded-lg shadow-lg border border-gray-100 z-20 overflow-hidden">
+                    <div className="p-2 border-b border-gray-100">
+                      <button
+                        onClick={() => { setShowSchemeMenu(false); setShowSchemeDialog(true); setSchemeName(''); }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded-lg"
+                      >
+                        <BookmarkPlus className="w-4 h-4" />
+                        保存当前筛选为方案
+                      </button>
+                    </div>
+                    <div className="max-h-60 overflow-y-auto">
+                      {filterSchemes.length === 0 && (
+                        <div className="p-4 text-center text-sm text-gray-400">暂无保存的筛选方案</div>
+                      )}
+                      {filterSchemes.map((s) => (
+                        <div key={s.id} className="flex items-center justify-between px-3 py-2 hover:bg-gray-50 group">
+                          <button
+                            onClick={() => applyScheme(s)}
+                            className="flex-1 text-left"
+                          >
+                            <div className="text-sm font-medium text-gray-900">{s.name}</div>
+                            <div className="text-xs text-gray-400 mt-0.5">
+                              {s.status !== 'all' && `${CHECK_RECORD_STATUS_LABELS[s.status]} · `}
+                              {s.carrier !== 'all' && `${s.carrier} · `}
+                              {(s.startDate || s.endDate) && `${s.startDate || '...'}~${s.endDate || '...'} · `}
+                              {s.keyword && `关键词:${s.keyword}`}
+                              {!s.keyword && s.status === 'all' && s.carrier === 'all' && !s.startDate && !s.endDate && '无筛选条件'}
+                            </div>
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deleteFilterScheme(s.id); }}
+                            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 rounded"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                icon={Download}
+                onClick={handleExportFiltered}
+                disabled={filteredRecords.length === 0}
+              >
+                导出筛选结果 ({filteredRecords.length})
+              </Button>
             </div>
           </div>
 
@@ -623,7 +855,9 @@ export const ExportArchive = () => {
         </Button>
       </div>
 
-      {showDetail && selectedRecord && (
+      {showDetail && selectedRecord && (() => {
+        const insight = buildReviewInsight(selectedRecord);
+        return (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl w-full max-w-5xl max-h-[92vh] overflow-hidden shadow-2xl flex flex-col">
             <div className="p-6 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
@@ -673,6 +907,81 @@ export const ExportArchive = () => {
             <div className="p-6 overflow-y-auto flex-1">
               {activeDetailTab === 'overview' && (
                 <div>
+                  <div className="mb-6 p-5 bg-gradient-to-r from-slate-50 to-blue-50 rounded-xl border border-slate-100">
+                    <div className="flex items-center gap-2 mb-4">
+                      <BarChart3 className="w-5 h-5 text-blue-600" />
+                      <h4 className="font-semibold text-gray-900">复盘结论</h4>
+                      <span className="text-xs text-gray-400">自动归纳本批次核心指标</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="bg-white rounded-lg p-4 border border-slate-100 shadow-sm">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Award className="w-4 h-4 text-amber-500" />
+                          <span className="text-xs text-gray-500 font-medium">差异金额最高承运商</span>
+                        </div>
+                        {insight.topCarrier ? (
+                          <>
+                            <p className="text-base font-semibold text-gray-900">{insight.topCarrier.carrier}</p>
+                            <p className="text-sm text-red-600 mt-1">差异金额 ¥{formatAmount(insight.topCarrier.diffAmount)}</p>
+                          </>
+                        ) : (
+                          <p className="text-sm text-gray-400">本批次无差异</p>
+                        )}
+                        {insight.carrierRank.length > 1 && (
+                          <div className="mt-3 pt-3 border-t border-gray-100">
+                            <p className="text-xs text-gray-400 mb-1">承运商差异排行 TOP 3</p>
+                            <div className="space-y-1">
+                              {insight.carrierRank.slice(0, 3).map((c, i) => (
+                                <div key={c.carrier} className="flex justify-between text-xs">
+                                  <span className="text-gray-600">#{i + 1} {c.carrier}</span>
+                                  <span className="text-red-500 font-medium">¥{formatAmount(c.diffAmount)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="bg-white rounded-lg p-4 border border-slate-100 shadow-sm">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Route className="w-4 h-4 text-emerald-500" />
+                          <span className="text-xs text-gray-500 font-medium">金额最大线路</span>
+                        </div>
+                        {insight.topLine ? (
+                          <>
+                            <p className="text-base font-semibold text-gray-900 truncate">{insight.topLine.line}</p>
+                            <div className="flex items-center gap-3 mt-1 text-sm">
+                              <span className="text-blue-600">应付 ¥{formatAmount(insight.topLine.payableAmount)}</span>
+                              <span className="text-gray-400">{insight.topLine.waybillCount} 单</span>
+                            </div>
+                          </>
+                        ) : (
+                          <p className="text-sm text-gray-400">暂无运单数据</p>
+                        )}
+                      </div>
+
+                      <div className="bg-white rounded-lg p-4 border border-slate-100 shadow-sm">
+                        <div className="flex items-center gap-2 mb-2">
+                          <AlertOctagon className="w-4 h-4 text-rose-500" />
+                          <span className="text-xs text-gray-500 font-medium">最集中问题类型</span>
+                        </div>
+                        {insight.topDiffType ? (
+                          <>
+                            <div className="flex items-center gap-2">
+                              <Badge className={DIFF_TYPE_COLORS[insight.topDiffType.diffType as keyof typeof DIFF_TYPE_COLORS] || 'bg-gray-100 text-gray-600'} size="sm">
+                                {(DIFF_TYPE_LABELS as any)[insight.topDiffType.diffType] || insight.topDiffType.diffType}
+                              </Badge>
+                              <span className="text-base font-semibold text-gray-900">{insight.topDiffType.count} 次</span>
+                            </div>
+                            <p className="text-sm text-red-600 mt-1">涉及差异 ¥{formatAmount(insight.topDiffType.diffAmount)}</p>
+                          </>
+                        ) : (
+                          <p className="text-sm text-gray-400">本批次无差异</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-4 mb-6">
                     <div className="bg-gray-50 rounded-lg p-4">
                       <p className="text-sm text-gray-500">核对日期</p>
@@ -1098,15 +1407,16 @@ export const ExportArchive = () => {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {showCompareDialog && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] overflow-hidden shadow-2xl flex flex-col">
             <div className="p-6 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
               <div>
-                <h3 className="text-lg font-semibold text-gray-900">历史批次对比</h3>
-                <p className="text-sm text-gray-500 mt-1">选择两个批次，按维度查看单量、差异金额、应付金额的波动</p>
+                <h3 className="text-lg font-semibold text-gray-900">历史批次对比分析台</h3>
+                <p className="text-sm text-gray-500 mt-1">双批次横评：{dimLabel}维度下的单量、差异金额、应付金额波动</p>
               </div>
               <button
                 onClick={() => setShowCompareDialog(false)}
@@ -1128,7 +1438,7 @@ export const ExportArchive = () => {
                     <option value="">请选择批次</option>
                     {checkRecords.map((r) => (
                       <option key={r.id} value={r.id}>
-                        {r.checkBatchNo} · {r.checkDate} · {CHECK_RECORD_STATUS_LABELS[r.status]}
+                        {r.checkBatchNo} · {r.checkDate} · {CHECK_RECORD_STATUS_LABELS[r.status]} · 应付¥{formatAmount(r.payableAmount)}
                       </option>
                     ))}
                   </select>
@@ -1143,7 +1453,7 @@ export const ExportArchive = () => {
                     <option value="">请选择批次</option>
                     {checkRecords.map((r) => (
                       <option key={r.id} value={r.id}>
-                        {r.checkBatchNo} · {r.checkDate} · {CHECK_RECORD_STATUS_LABELS[r.status]}
+                        {r.checkBatchNo} · {r.checkDate} · {CHECK_RECORD_STATUS_LABELS[r.status]} · 应付¥{formatAmount(r.payableAmount)}
                       </option>
                     ))}
                   </select>
@@ -1157,7 +1467,7 @@ export const ExportArchive = () => {
                     onClick={() => setCompareDim(dim)}
                     className={`px-4 py-2 text-sm rounded-lg font-medium transition-colors ${
                       compareDim === dim
-                        ? 'bg-blue-600 text-white'
+                        ? 'bg-blue-600 text-white shadow-sm'
                         : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                     }`}
                   >
@@ -1175,125 +1485,112 @@ export const ExportArchive = () => {
                   <GitCompareArrows className="w-12 h-12 text-gray-300 mx-auto mb-4" />
                   <p className="text-gray-500">请先选择两个批次进行对比</p>
                 </div>
-              ) : compareResult && compareResult.type === 'carrier' ? (
-                <div className="border border-gray-200 rounded-lg overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th rowSpan={2} className="px-3 py-2 text-left text-xs font-medium text-gray-500 border-r border-gray-200">承运商</th>
-                        <th colSpan={2} className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200">单量</th>
-                        <th colSpan={3} className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-r border-l border-gray-200">差异金额</th>
-                        <th colSpan={3} className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200">应付金额</th>
-                      </tr>
-                      <tr className="bg-gray-50">
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 border-r border-gray-200">B</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">B</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 border-r border-gray-200">Δ%</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">B</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Δ%</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {compareResult.rows.map((row) => {
-                        const dpDiff = deltaPct(row.diffAmountA, row.diffAmountB);
-                        const dpPay = deltaPct(row.payableAmountA, row.payableAmountB);
-                        return (
-                          <tr key={row.key} className="hover:bg-gray-50">
-                            <td className="px-3 py-2 font-medium text-gray-900 border-r border-gray-100">{row.label}</td>
-                            <td className="px-3 py-2 text-right text-gray-600">{row.waybillCountA}</td>
-                            <td className="px-3 py-2 text-right text-gray-600 border-r border-gray-100">{row.waybillCountB}</td>
-                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.diffAmountA)}</td>
-                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.diffAmountB)}</td>
-                            <td className={`px-3 py-2 text-right font-medium border-r border-gray-100 ${dpDiff > 0 ? 'text-red-600' : dpDiff < 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
-                              {dpDiff > 0 ? '+' : ''}{dpDiff}%
-                            </td>
-                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.payableAmountA)}</td>
-                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.payableAmountB)}</td>
-                            <td className={`px-3 py-2 text-right font-medium ${dpPay > 0 ? 'text-red-600' : dpPay < 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
-                              {dpPay > 0 ? '+' : ''}{dpPay}%
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+              ) : compareResult && compareResult.rows.length > 0 ? (
+                <div>
+                  <div className="mb-3 flex items-center gap-2 text-sm text-gray-500">
+                    <BarChart3 className="w-4 h-4" />
+                    <span>
+                      共 {compareResult.rows.length} 个{dimLabel}，变化率
+                      <span className="text-red-600 font-medium mx-1">上涨标红</span>
+                      <span className="text-emerald-600 font-medium mr-1">下降标绿</span>
+                    </span>
+                  </div>
+                  <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gradient-to-r from-slate-50 to-blue-50">
+                        <tr>
+                          <th
+                            rowSpan={2}
+                            className="px-3 py-2 text-left text-xs font-semibold text-gray-700 border-r border-gray-200 sticky left-0 bg-gradient-to-r from-slate-50 to-blue-50"
+                          >
+                            {dimLabel}
+                          </th>
+                          <th
+                            colSpan={4}
+                            className="px-3 py-2 text-center text-xs font-semibold text-gray-700 border-b border-r border-gray-200"
+                          >
+                            单量（运单数）
+                          </th>
+                          <th
+                            colSpan={4}
+                            className="px-3 py-2 text-center text-xs font-semibold text-gray-700 border-b border-r border-gray-200"
+                          >
+                            差异金额
+                          </th>
+                          <th
+                            colSpan={4}
+                            className="px-3 py-2 text-center text-xs font-semibold text-gray-700 border-b border-gray-200"
+                          >
+                            应付金额
+                          </th>
+                        </tr>
+                        <tr className="bg-slate-50">
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">B</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Δ</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 border-r border-gray-200">Δ%</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">B</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Δ</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 border-r border-gray-200">Δ%</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">B</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Δ</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Δ%</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {compareResult.rows.map((row) => {
+                          const dWb = row.waybillCountB - row.waybillCountA;
+                          const dWbPct = deltaPct(row.waybillCountA, row.waybillCountB);
+                          const dDiff = row.diffAmountB - row.diffAmountA;
+                          const dDiffPct = deltaPct(row.diffAmountA, row.diffAmountB);
+                          const dPay = row.payableAmountB - row.payableAmountA;
+                          const dPayPct = deltaPct(row.payableAmountA, row.payableAmountB);
+                          const cellColor = (v: number) =>
+                            v > 0 ? 'text-red-600' : v < 0 ? 'text-emerald-600' : 'text-gray-400';
+                          return (
+                            <tr key={row.key} className="hover:bg-blue-50/40">
+                              <td className="px-3 py-2 font-medium text-gray-900 border-r border-gray-100 sticky left-0 bg-white">
+                                {row.label}
+                              </td>
+                              <td className="px-3 py-2 text-right text-gray-600">{row.waybillCountA}</td>
+                              <td className="px-3 py-2 text-right text-gray-900 font-medium">{row.waybillCountB}</td>
+                              <td className={`px-3 py-2 text-right font-medium ${cellColor(dWb)}`}>
+                                {dWb > 0 ? `+${dWb}` : dWb}
+                              </td>
+                              <td className={`px-3 py-2 text-right font-medium border-r border-gray-100 ${cellColor(dWbPct)}`}>
+                                {dWbPct > 0 ? '+' : ''}{dWbPct}%
+                              </td>
+                              <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.diffAmountA)}</td>
+                              <td className="px-3 py-2 text-right text-gray-900 font-medium">¥{formatAmount(row.diffAmountB)}</td>
+                              <td className={`px-3 py-2 text-right font-medium ${cellColor(dDiff)}`}>
+                                {dDiff > 0 ? '+' : ''}¥{formatAmount(Math.abs(dDiff))}
+                              </td>
+                              <td className={`px-3 py-2 text-right font-medium border-r border-gray-100 ${cellColor(dDiffPct)}`}>
+                                {dDiffPct > 0 ? '+' : ''}{dDiffPct}%
+                              </td>
+                              <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.payableAmountA)}</td>
+                              <td className="px-3 py-2 text-right text-gray-900 font-medium">¥{formatAmount(row.payableAmountB)}</td>
+                              <td className={`px-3 py-2 text-right font-medium ${cellColor(dPay)}`}>
+                                {dPay > 0 ? '+' : ''}¥{formatAmount(Math.abs(dPay))}
+                              </td>
+                              <td className={`px-3 py-2 text-right font-medium ${cellColor(dPayPct)}`}>
+                                {dPayPct > 0 ? '+' : ''}{dPayPct}%
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              ) : compareResult && compareResult.type === 'line' ? (
-                <div className="border border-gray-200 rounded-lg overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th rowSpan={2} className="px-3 py-2 text-left text-xs font-medium text-gray-500 border-r border-gray-200">线路</th>
-                        <th colSpan={2} className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200">单量</th>
-                        <th colSpan={3} className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200">应付金额</th>
-                      </tr>
-                      <tr className="bg-gray-50">
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 border-r border-gray-200">B</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">B</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Δ%</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {compareResult.rows.map((row) => {
-                        const dp = deltaPct(row.payableA, row.payableB);
-                        return (
-                          <tr key={row.key} className="hover:bg-gray-50">
-                            <td className="px-3 py-2 font-medium text-gray-900 border-r border-gray-100">{row.label}</td>
-                            <td className="px-3 py-2 text-right text-gray-600">{row.waybillCountA}</td>
-                            <td className="px-3 py-2 text-right text-gray-600 border-r border-gray-100">{row.waybillCountB}</td>
-                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.payableA)}</td>
-                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.payableB)}</td>
-                            <td className={`px-3 py-2 text-right font-medium ${dp > 0 ? 'text-red-600' : dp < 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
-                              {dp > 0 ? '+' : ''}{dp}%
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+              ) : (
+                <div className="text-center py-16 bg-gray-50 rounded-lg">
+                  <BarChart3 className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                  <p className="text-gray-500">当前维度暂无可对比数据</p>
                 </div>
-              ) : compareResult && compareResult.type === 'diffType' ? (
-                <div className="border border-gray-200 rounded-lg overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th rowSpan={2} className="px-3 py-2 text-left text-xs font-medium text-gray-500 border-r border-gray-200">差异类型</th>
-                        <th colSpan={2} className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200">数量</th>
-                        <th colSpan={3} className="px-3 py-2 text-center text-xs font-medium text-gray-500 border-b border-gray-200">差异金额</th>
-                      </tr>
-                      <tr className="bg-gray-50">
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 border-r border-gray-200">B</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">A</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">B</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Δ%</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {compareResult.rows.map((row) => {
-                        const dp = deltaPct(row.diffAmountA, row.diffAmountB);
-                        return (
-                          <tr key={row.key} className="hover:bg-gray-50">
-                            <td className="px-3 py-2 font-medium text-gray-900 border-r border-gray-100">{row.label}</td>
-                            <td className="px-3 py-2 text-right text-gray-600">{row.countA}</td>
-                            <td className="px-3 py-2 text-right text-gray-600 border-r border-gray-100">{row.countB}</td>
-                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.diffAmountA)}</td>
-                            <td className="px-3 py-2 text-right text-gray-600">¥{formatAmount(row.diffAmountB)}</td>
-                            <td className={`px-3 py-2 text-right font-medium ${dp > 0 ? 'text-red-600' : dp < 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
-                              {dp > 0 ? '+' : ''}{dp}%
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              ) : null}
+              )}
             </div>
 
             <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3 flex-shrink-0">
@@ -1346,6 +1643,69 @@ export const ExportArchive = () => {
               </Button>
               <Button variant="primary" icon={CheckCircle} onClick={handleConfirmArchive}>
                 确认归档
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSchemeDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
+          <div className="bg-white rounded-xl w-full max-w-md p-6 shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+                <BookmarkPlus className="w-5 h-5 text-blue-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">保存筛选方案</h3>
+                <p className="text-sm text-gray-500">保存后可在筛选方案下拉中快速复用</p>
+              </div>
+            </div>
+
+            <div className="space-y-2 mb-4 text-sm bg-gray-50 p-3 rounded-lg">
+              <p className="text-xs text-gray-400 mb-1">当前筛选条件</p>
+              <div className="space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">状态</span>
+                  <span className="font-medium">
+                    {filterStatus === 'all' ? '全部' : CHECK_RECORD_STATUS_LABELS[filterStatus]}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">承运商</span>
+                  <span className="font-medium">{filterCarrier === 'all' ? '全部' : filterCarrier}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">日期范围</span>
+                  <span className="font-medium">
+                    {filterStartDate || '...'} ~ {filterEndDate || '...'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">关键词</span>
+                  <span className="font-medium">{searchKeyword || '无'}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <label className="text-sm text-gray-500 mb-1 block">方案名称</label>
+              <input
+                type="text"
+                value={schemeName}
+                onChange={(e) => setSchemeName(e.target.value)}
+                placeholder="例如：本月已归档批次"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                autoFocus
+              />
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" onClick={() => { setShowSchemeDialog(false); setSchemeName(''); }}>
+                取消
+              </Button>
+              <Button variant="primary" icon={Bookmark} onClick={handleSaveScheme} disabled={!schemeName.trim()}>
+                保存方案
               </Button>
             </div>
           </div>

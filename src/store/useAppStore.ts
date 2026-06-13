@@ -17,6 +17,7 @@ import {
   DiffStatus,
   CheckRecordStatus,
   InvalidRowDetail,
+  FilterScheme,
 } from '@/types';
 import { mockData } from '@/data/mockData';
 import { parseExcelFile } from '@/utils/fileParser';
@@ -243,6 +244,11 @@ interface AppState {
   loadHistoryFromDB: () => Promise<void>;
   markRecordReviewed: (id: string, remark?: string) => void;
   markRecordArchived: (id: string, remark?: string) => void;
+
+  filterSchemes: FilterScheme[];
+  saveFilterScheme: (name: string, data: Omit<FilterScheme, 'id' | 'name' | 'createdAt'>) => Promise<void>;
+  loadFilterSchemes: () => Promise<void>;
+  deleteFilterScheme: (id: string) => Promise<void>;
 
   getFilteredDiffs: () => DiffRecord[];
 }
@@ -495,8 +501,9 @@ function computeCarrierSummaries(waybillSummaries: WaybillSummary[]): CarrierSum
 }
 
 const DB_NAME = 'FreightCheckDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'checkRecords';
+const STORE_FILTER_SCHEMES = 'filterSchemes';
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -505,6 +512,9 @@ function openDB(): Promise<IDBDatabase> {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_FILTER_SCHEMES)) {
+        db.createObjectStore(STORE_FILTER_SCHEMES, { keyPath: 'id' });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -546,6 +556,40 @@ async function loadOneFromIndexedDB(id: string): Promise<CheckRecord | undefined
   });
 }
 
+async function saveFilterSchemeToDB(scheme: FilterScheme): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_FILTER_SCHEMES, 'readwrite');
+    tx.objectStore(STORE_FILTER_SCHEMES).put(scheme);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function loadFilterSchemesFromDB(): Promise<FilterScheme[]> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_FILTER_SCHEMES, 'readonly');
+    const request = tx.objectStore(STORE_FILTER_SCHEMES).getAll();
+    request.onsuccess = () => {
+      const list = request.result as FilterScheme[];
+      list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      resolve(list);
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function deleteFilterSchemeFromDB(id: string): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_FILTER_SCHEMES, 'readwrite');
+    tx.objectStore(STORE_FILTER_SCHEMES).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   waybills: [],
   receipts: [],
@@ -562,6 +606,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   filterDiffType: 'all',
   filterDiffStatus: 'all',
   searchKeyword: '',
+  filterSchemes: [],
 
   setCurrentStep: (step) => set({ currentStep: step }),
 
@@ -862,5 +907,26 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       return true;
     });
+  },
+
+  saveFilterScheme: async (name, data) => {
+    const scheme: FilterScheme = {
+      id: generateId(),
+      name,
+      ...data,
+      createdAt: new Date().toLocaleString('zh-CN'),
+    };
+    await saveFilterSchemeToDB(scheme);
+    set((state) => ({ filterSchemes: [scheme, ...state.filterSchemes] }));
+  },
+
+  loadFilterSchemes: async () => {
+    const list = await loadFilterSchemesFromDB();
+    set({ filterSchemes: list });
+  },
+
+  deleteFilterScheme: async (id) => {
+    await deleteFilterSchemeFromDB(id);
+    set((state) => ({ filterSchemes: state.filterSchemes.filter((s) => s.id !== id) }));
   },
 }));

@@ -236,6 +236,17 @@ export const CHECK_RECORD_STATUS_COLORS: Record<CheckRecordStatus, string> = {
   archived: 'bg-emerald-50 text-emerald-600 border-emerald-200',
 };
 
+export interface FilterScheme {
+  id: string;
+  name: string;
+  keyword: string;
+  status: CheckRecordStatus | 'all';
+  carrier: string;
+  startDate: string;
+  endDate: string;
+  createdAt: string;
+}
+
 export const VEHICLE_TYPES = ['4.2米厢车', '6.8米厢车', '9.6米厢车', '13米高栏', '17.5米平板'];
 
 export const LINES = ['北京-上海', '北京-广州', '上海-广州', '深圳-杭州', '广州-成都', '上海-成都'];
